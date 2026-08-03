@@ -1,0 +1,30 @@
+# rclone filter rules for the "D:\Meine Ablage" <-> gdrive: bisync.
+# First matching rule wins; no leading slash = matches at any depth.
+# NOTE: changing this file requires a one-time "bisync --resync" afterwards.
+# Decisions (2026-08-03): build outputs excluded EVERYWHERE; .git stays synced
+# until the remaining repos have been relocated out of the Ablage.
+
+# Package managers / language environments
+- node_modules/**
+- __pycache__/**
+- .venv/**
+- venv/**
+- .tox/**
+- site-packages/**
+
+# Build outputs
+- build/**
+- target/**
+- dist/**
+- out/**
+- .next/**
+- .cache/**
+- .gradle/**
+
+# DriveFS remnants and Windows system junk
+- .tmp.driveupload/**
+- $RECYCLE.BIN/**
+- System Volume Information/**
+- desktop.ini
+- Thumbs.db
+- ~$*
