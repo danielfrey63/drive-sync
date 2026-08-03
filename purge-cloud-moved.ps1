@@ -70,6 +70,19 @@ $paths = @(
     # trashed duplicates
     "Develop/Station/desktop-app"
     "Develop/Odoo/Docker/docker"
+    # stale copies of the 2026-07-30 checkout migration (now in D:\Develop\sbb / \sem)
+    "Akros/Kunden/SBB/Develop/agent-rollout"
+    "Akros/Kunden/SBB/Develop/ai-guardrail-demo"
+    "Akros/Kunden/SBB/Develop/azure-api-mcp-registry"
+    "Akros/Kunden/SBB/Develop/brain"
+    "Akros/Kunden/SBB/Develop/centralized-agents-experiment"
+    "Akros/Kunden/SBB/Develop/contained-agents"
+    "Akros/Kunden/SBB/Develop/poc-esta-dfa-weicheneditor-artefakte"
+    "Akros/Kunden/SBB/Develop/timo-sdd"
+    "Akros/Kunden/SBB/Develop/dokumentations-tools"
+    "Akros/Kunden/SEM/Auftrag"
+    # old cloud names of dirs renamed locally after 2026-07-27
+    "Privat/Viseca/Ald"
 )
 # trashed SBB repository clones (mirror of D:\_trash-ablage-repos\SBB-Repository)
 $sbbTrash = Get-ChildItem "D:\_trash-ablage-repos\SBB-Repository" -Directory -ErrorAction SilentlyContinue
