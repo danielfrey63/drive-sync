@@ -21,6 +21,17 @@
 - .cache/**
 - .gradle/**
 
+# DriveFS pointer files for Google-native docs (the docs themselves stay
+# cloud-only via --drive-skip-gdocs; pointers stay local for the gdrive skill)
+- *.gdoc
+- *.gsheet
+- *.gslides
+- *.gdraw
+- *.gform
+- *.gtable
+- *.glink
+- *.gmaps
+
 # DriveFS remnants and Windows system junk
 - .tmp.driveupload/**
 - $RECYCLE.BIN/**
