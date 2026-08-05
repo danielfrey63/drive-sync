@@ -58,6 +58,9 @@ elseif (-not $env:RCLONE_CONFIG) {
     $cfg = @(& rclone config file 2>$null)[-1]
     if ($cfg -and (Test-Path $cfg)) { $env:RCLONE_CONFIG = $cfg }
 }
+# recycle via rclone if the build supports --local-use-trash (rclone PR 9741),
+# otherwise fall back to the SHFileOperation shim below
+$rcloneHasLocalTrash = [bool](& $rcloneExe help flags local-use-trash 2>$null | Select-String "local-use-trash")
 
 function Write-Log([string]$msg) {
     # logging must never kill the watcher
@@ -308,7 +311,13 @@ try {
                     foreach ($t in @($trash | Sort-Object)) {
                         $abs = Join-Path $root $t
                         if (-not (Test-Path -LiteralPath $abs)) { continue }   # already gone locally
-                        $rc = [RecycleBin]::Delete($abs)
+                        if ($rcloneHasLocalTrash) {
+                            $isDir = Test-Path -LiteralPath $abs -PathType Container
+                            if ($isDir) { & $rcloneExe purge $abs --local-use-trash -q 2>$null }
+                            else { & $rcloneExe deletefile $abs --local-use-trash -q 2>$null }
+                            $rc = $LASTEXITCODE
+                        }
+                        else { $rc = [RecycleBin]::Delete($abs) }
                         if ($rc -eq 0) { $recycledTotal++; Write-Log "cloud trash -> recycle bin: $t" }
                         else { Write-Log "WARN recycle failed (rc=$rc): $t" }
                     }
