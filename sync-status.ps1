@@ -8,6 +8,13 @@ if ($s.lastSuccess) {
     "Last success: $($s.lastSuccess.end)  ($age h ago)"
 }
 else { "Last success: NEVER" }
+$w = Join-Path $env:LOCALAPPDATA "drive-sync\watcher-status.json"
+if (Test-Path $w) {
+    $ws = Get-Content $w -Raw | ConvertFrom-Json
+    $alive = [bool](Get-Process -Id $ws.pid -ErrorAction SilentlyContinue)
+    "Watcher:      $(if ($alive) { "running (PID $($ws.pid))" } else { 'NOT RUNNING' })  lastFlush=$($ws.lastFlush) ($($ws.lastBatch) files, exit=$($ws.lastExit))  total=$($ws.uploadedTotal)"
+}
+else { "Watcher:      no flush recorded yet" }
 if ($s.lastRun.log -and (Test-Path $s.lastRun.log)) {
     ""
     "--- log tail ---"
