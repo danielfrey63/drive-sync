@@ -47,6 +47,17 @@ $tokenFile = Join-Path $stateDir "cloud-watcher-pagetoken.txt"
 $bisyncLock = Join-Path $stateDir "sync.lock"
 $maxDeletes = 50
 New-Item -ItemType Directory -Force $stateDir | Out-Null
+# custom build (release + --files-from-strict backport) if deployed, else PATH
+# rclone. Downloads deliberately do NOT use --files-from-strict: a file may
+# legitimately vanish in the cloud between change event and flush.
+$rcloneExe = Join-Path $env:LOCALAPPDATA "drive-sync\bin\rclone.exe"
+if (-not (Test-Path $rcloneExe)) { $rcloneExe = "rclone" }
+elseif (-not $env:RCLONE_CONFIG) {
+    # the custom build defaults to %APPDATA%, but scoop keeps the config in its
+    # persist dir - resolve it via the PATH rclone once and pin it
+    $cfg = @(& rclone config file 2>$null)[-1]
+    if ($cfg -and (Test-Path $cfg)) { $env:RCLONE_CONFIG = $cfg }
+}
 
 function Write-Log([string]$msg) {
     # logging must never kill the watcher
@@ -117,7 +128,7 @@ Set-Content $lockFile $PID
 $rules = Get-ExcludeRules (Join-Path $PSScriptRoot "filters.txt")
 
 # --- OAuth: reuse the rclone remote's credentials ---------------------------
-$remoteConf = (rclone config dump | ConvertFrom-Json).$remoteName
+$remoteConf = (& $rcloneExe config dump | ConvertFrom-Json).$remoteName
 if (-not $remoteConf) { Write-Log "FATAL: rclone remote '$remoteName' not found"; exit 1 }
 $refreshToken = ($remoteConf.token | ConvertFrom-Json).refresh_token
 $script:accessToken = $null
@@ -125,7 +136,9 @@ $script:accessTokenExpiry = [datetime]::MinValue
 
 function Get-AccessToken {
     if ($script:accessToken -and (Get-Date) -lt $script:accessTokenExpiry) { return $script:accessToken }
-    $resp = Invoke-RestMethod -Method Post -Uri "https://oauth2.googleapis.com/token" -Body @{
+    # -TimeoutSec is essential: the default is infinite, and a hung TLS
+    # connection would freeze the whole watcher silently
+    $resp = Invoke-RestMethod -Method Post -Uri "https://oauth2.googleapis.com/token" -TimeoutSec 30 -Body @{
         client_id = $remoteConf.client_id; client_secret = $remoteConf.client_secret
         refresh_token = $refreshToken; grant_type = "refresh_token"
     }
@@ -138,7 +151,7 @@ function Invoke-Drive([string]$pathAndQuery) {
     # one retry with a forced token refresh on 401
     foreach ($attempt in 1, 2) {
         try {
-            return Invoke-RestMethod -Uri "https://www.googleapis.com/drive/v3/$pathAndQuery" `
+            return Invoke-RestMethod -Uri "https://www.googleapis.com/drive/v3/$pathAndQuery" -TimeoutSec 60 `
                 -Headers @{ Authorization = "Bearer $(Get-AccessToken)" }
         }
         catch {
@@ -201,8 +214,13 @@ $recycledTotal = 0
 $lastSavedToken = $pageToken
 $fields = "changes(removed,fileId,file(id,name,mimeType,parents,trashed)),nextPageToken,newStartPageToken"
 
+$lastHeartbeat = Get-Date
 try {
     while ($true) {
+        if (((Get-Date) - $lastHeartbeat).TotalMinutes -ge 10) {
+            Write-Log "heartbeat: $($pending.Count) down / $($trash.Count) trash pending"
+            $lastHeartbeat = Get-Date
+        }
         try {
             $token = $pageToken
             while ($token) {
@@ -272,7 +290,7 @@ try {
                         $batchFile = Join-Path $stateDir "cloud-batch.txt"
                         # rclone expects "/" separators for remote paths in --files-from
                         Set-Content -Path $batchFile -Value @($batch | ForEach-Object { $_ -replace '\\', '/' }) -Encoding UTF8
-                        & rclone copy "${remoteName}:" $root --files-from-raw $batchFile --no-traverse --update `
+                        & $rcloneExe copy "${remoteName}:" $root --files-from-raw $batchFile --no-traverse --update `
                             --modify-window 1s --drive-pacer-min-sleep 10ms --drive-pacer-burst 200 `
                             --transfers 4 --log-level INFO --log-file $logFile 2>$null
                         $exit = $LASTEXITCODE

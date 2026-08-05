@@ -30,6 +30,15 @@ $lockFile = Join-Path $stateDir "watcher.lock"
 $bisyncLock = Join-Path $stateDir "sync.lock"
 $maxDeletes = 50
 $pacer = @("--drive-pacer-min-sleep", "10ms", "--drive-pacer-burst", "200")
+# custom build (release + --files-from-strict backport) if deployed, else PATH rclone
+$rcloneExe = Join-Path $env:LOCALAPPDATA "drive-sync\bin\rclone.exe"
+if (-not (Test-Path $rcloneExe)) { $rcloneExe = "rclone" }
+elseif (-not $env:RCLONE_CONFIG) {
+    # the custom build defaults to %APPDATA%, but scoop keeps the config in its
+    # persist dir - resolve it via the PATH rclone once and pin it
+    $cfg = @(& rclone config file 2>$null)[-1]
+    if ($cfg -and (Test-Path $cfg)) { $env:RCLONE_CONFIG = $cfg }
+}
 New-Item -ItemType Directory -Force $stateDir | Out-Null
 
 function Write-Log([string]$msg) {
@@ -120,9 +129,14 @@ function Add-LedgerEntries([string[]]$rels) {
 }
 
 # --- main loop: debounce and flush ------------------------------------------
+$lastHeartbeat = Get-Date
 try {
     while ($true) {
         $null = Wait-Event -Timeout 3
+        if (((Get-Date) - $lastHeartbeat).TotalMinutes -ge 10) {
+            Write-Log "heartbeat: $($pending.Count) up / $($renames.Count) ren / $($deletes.Count) del pending"
+            $lastHeartbeat = Get-Date
+        }
         $drained = 0
         foreach ($evt in @(Get-Event)) {
             $drained++
@@ -181,7 +195,7 @@ try {
                 if (-not (Test-Path -LiteralPath $newAbs)) { continue }   # gone again; delete/bisync covers it
                 $oldR = $rn.Old -replace '\\', '/'
                 $newR = $rn.New -replace '\\', '/'
-                & rclone moveto "$remote$oldR" "$remote$newR" @pacer --log-level ERROR --log-file $logFile 2>$null
+                & $rcloneExe moveto "$remote$oldR" "$remote$newR" @pacer --log-level ERROR --log-file $logFile 2>$null
                 if ($LASTEXITCODE -eq 0) {
                     $renamedTotal++
                     Write-Log "rename: $oldR -> $newR"
@@ -202,12 +216,23 @@ try {
                 $batchFile = Join-Path $stateDir "watcher-batch.txt"
                 # rclone expects "/" separators for the gdrive: destination side too
                 Set-Content -Path $batchFile -Value @($batch | ForEach-Object { $_ -replace '\\', '/' }) -Encoding UTF8
-                & rclone copy $root $remote --files-from-raw $batchFile --no-traverse `
+                # --files-from-strict (backported): a wrong path mapping now fails
+                # loudly instead of being skipped silently
+                & $rcloneExe copy $root $remote --files-from-raw $batchFile --no-traverse --files-from-strict `
                     --modify-window 1s @pacer --transfers 4 --log-level INFO --log-file $logFile 2>$null
                 $exit = $LASTEXITCODE
-                $uploadedTotal += $batch.Count
                 Write-Log "flush: $($batch.Count) file(s), exit=$exit"
-                Add-LedgerEntries $batch
+                if ($exit -eq 0) {
+                    $uploadedTotal += $batch.Count
+                    Add-LedgerEntries $batch
+                }
+                else {
+                    # strict mode fails the whole batch if one file vanished mid-flight:
+                    # re-queue; entries gone from disk drop out via the Test-Path filter
+                    foreach ($r in $batch) { [void]$pending.Add($r) }
+                    $lastEvent = Get-Date   # restart the quiet timer to pace retries
+                    Write-Log "re-queued $($batch.Count) file(s) after failed flush"
+                }
             }
 
             # 3) deletes: verify, cap, then move to the Drive trash
@@ -222,10 +247,10 @@ try {
                     if (Test-Path -LiteralPath (Join-Path $root $d)) { continue }   # recreated meanwhile
                     if (@($delList | Where-Object { $_ -ne $d -and $d.StartsWith("$_\") }).Count -gt 0) { continue }   # ancestor dir covers it
                     $dR = $d -replace '\\', '/'
-                    $stat = & rclone lsjson "$remote$dR" --stat @pacer 2>$null | ConvertFrom-Json
+                    $stat = & $rcloneExe lsjson "$remote$dR" --stat @pacer 2>$null | ConvertFrom-Json
                     if (-not $stat) { continue }   # not in the cloud (already gone)
-                    if ($stat.IsDir) { & rclone purge "$remote$dR" @pacer --log-level ERROR --log-file $logFile 2>$null }
-                    else { & rclone deletefile "$remote$dR" @pacer --log-level ERROR --log-file $logFile 2>$null }
+                    if ($stat.IsDir) { & $rcloneExe purge "$remote$dR" @pacer --log-level ERROR --log-file $logFile 2>$null }
+                    else { & $rcloneExe deletefile "$remote$dR" @pacer --log-level ERROR --log-file $logFile 2>$null }
                     if ($LASTEXITCODE -eq 0) { $deletedTotal++; Write-Log "delete -> Drive trash: $dR" }
                     else { Write-Log "WARN delete failed: $dR" }
                 }
