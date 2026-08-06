@@ -1,90 +1,112 @@
-# Drive-Sync: `D:\Meine Ablage` ↔ Google Drive via rclone
+# drive-sync
 
-Ersetzt Google DriveFS (stillgelegt 08/2026, Hintergrund im [Handover](HANDOVER-2026-07-30-drivefs-rclone.md)) durch einen dreistufigen Sync:
+Near-realtime bidirectional Google Drive sync for Windows, built on [rclone](https://rclone.org). A set of PowerShell scripts that replaced Google's official DriveFS client after it repeatedly failed to handle a ~1.6 million file corpus (runaway RAM, wedged virtual drive, endless re-sync loops).
 
-1. **Nacht-bisync** (täglich 04:00): `sync-drive.ps1` fährt einen vollen `rclone bisync` als Auffangnetz für alles, was die Watcher nicht abdecken (Konflikte, Verzeichnis-Renames in der Cloud, verpasste Events). Ein Volllauf listet ~1.6 Mio. Dateien und braucht ~25 Minuten.
-2. **Upload-Watcher** (`watch-drive.ps1`, permanent): FileSystemWatcher auf `D:\Meine Ablage`, lädt neue/geänderte Dateien nach ~20–40 s hoch, propagiert Renames server-seitig (`moveto`) und verifizierte Deletes in den **Drive-Papierkorb** (Cap: 50 pro Flush). Beim Start holt ein Catch-up (`rclone copy --max-age` über die Zeit seit dem letzten Liveness-Stempel) Dateien nach, die während eines Watcher-Ausfalls entstanden sind — Deletes/Renames aus der Lücke bleiben dem Nacht-bisync überlassen.
-3. **Cloud-Watcher** (`watch-cloud.ps1`, permanent): pollt die Google-Drive-Changes-API im 60-s-Takt, lädt neue/geänderte Cloud-Dateien nach ~1–2 min herunter und verschiebt cloud-seitig Gelöschtes in den **Windows-Papierkorb** (Cap: 50). Eigene Uploads werden über ein Ledger erkannt und übersprungen (Echo-Kontrolle).
+Three cooperating tiers:
 
-Grundprinzip: **Nichts wird hart gelöscht** — Löschungen landen immer im jeweiligen Papierkorb (Drive-Trash 30 Tage bzw. Windows-Papierkorb).
+1. **Nightly bisync** (daily, default 04:00): `sync-drive.ps1` runs a full `rclone bisync` as the safety net for everything the watchers do not cover (conflicts, cloud-side folder renames, missed events). A full run lists the whole tree on both sides.
+2. **Upload watcher** (`watch-drive.ps1`, permanent): a `FileSystemWatcher` on the local root uploads new/changed files after ~20–40 s, propagates renames server-side (`rclone moveto`) and verified local deletes into the **Drive trash** (capped per flush). On start, a catch-up (`rclone copy --max-age` over the time since the last liveness stamp) uploads files created while no watcher was running.
+3. **Cloud watcher** (`watch-cloud.ps1`, permanent): polls the Google Drive Changes API (delta calls with a persisted page token, no tree listing), downloads new/changed cloud files after ~1–2 min and moves cloud-trashed files to the **Windows recycle bin** (capped). A ledger of recent own uploads suppresses echo downloads.
 
-## Komponenten
+Guiding principle: **nothing is ever hard-deleted** — deletions always end up in the Drive trash (30 days) or the Windows recycle bin.
 
-| Datei | Zweck |
+## Components
+
+| File | Purpose |
 | --- | --- |
-| `sync-drive.ps1` | bisync-Wrapper (Lock, Logs, `status.json`); `-Resync` für Re-Baseline, `-DryRun` zum Testen |
-| `watch-drive.ps1` | Upload-Watcher lokal → Cloud (New/Update/Rename/Delete) |
-| `watch-cloud.ps1` | Download-Watcher Cloud → lokal (New/Update/Trash); `-Once` für einen Testzyklus |
-| `watchdog.ps1` | startet alle 15 min still gestorbene Watcher neu |
-| `filter-rules.ps1` | gemeinsame Exclude-Logik der Watcher, abgeleitet aus `filters.txt` |
-| `filters.txt` | Include-/Exclude-Regeln für bisync und Watcher (nach Änderung: `-Resync` nötig!) |
-| `run-hidden.vbs` | fensterloser Task-Launcher (verhindert das Aufblitzen von Konsolenfenstern) |
-| `install-sync-task.ps1` | registriert den Nacht-bisync-Task |
-| `install-watcher-task.ps1` | registriert Watcher- und Watchdog-Tasks |
-| `uninstall.ps1` | stoppt Watcher und entfernt alle vier Tasks (`-RemoveState` löscht zusätzlich das State-Verzeichnis) |
-| `sync-status.ps1` | Status-Übersicht (letzter bisync, Watcher-Zähler) |
-| `howto-google-oauth.md` | Anleitung: eigene Google-OAuth-Client-ID erstellen |
+| `config.ps1` | central configuration (defaults); override per machine via `config.local.ps1` (gitignored) |
+| `sync-drive.ps1` | bisync wrapper (lock, logs, `status.json`); `-Resync` re-baselines, `-DryRun` previews |
+| `watch-drive.ps1` | upload watcher local → cloud (new/update/rename/delete + start-up catch-up) |
+| `watch-cloud.ps1` | download watcher cloud → local (new/update/trash); `-Once` runs a single cycle |
+| `watchdog.ps1` | restarts silently died watchers every 15 min |
+| `filter-rules.ps1` | shared exclude logic for the watchers, derived from `filters.txt` |
+| `filters.txt` | include/exclude rules for bisync and watchers (changes require a `-Resync`!) |
+| `run-hidden.vbs` | windowless task launcher (no console window flashing) |
+| `install-sync-task.ps1` | registers the nightly bisync task |
+| `install-watcher-task.ps1` | registers watcher and watchdog tasks |
+| `uninstall.ps1` | stops the watchers and removes all four tasks (`-RemoveState` also deletes the state dir) |
+| `sync-status.ps1` | status overview (last bisync, watcher liveness and counters) |
+| `howto-google-oauth.md` | how to create your own Google OAuth client id |
 
-## Voraussetzungen
+`analyze-corpus.ps1`, `move-ablage-repos.ps1`, `purge-cloud-moved.ps1` and the `*.md` handover notes are one-off utilities from the original DriveFS migration, kept for reference.
 
-- PowerShell 7 (`scoop install pwsh`) und rclone (`scoop install rclone`).
-- Eigene Google-OAuth-Client-ID (siehe `howto-google-oauth.md`); das heruntergeladene `client_secret_*.json` liegt in diesem Ordner und ist per `.gitignore` vom Commit ausgeschlossen — **niemals committen**.
-- Ein konfiguriertes rclone-Remote namens `gdrive` (Typ `drive`, scope `drive`, client_id/client_secret aus dem JSON): `rclone config` starten und dem Assistenten folgen; die Autorisierung öffnet den Browser.
+## Requirements
+
+- Windows 10/11, PowerShell 7 (`scoop install pwsh`), rclone (`scoop install rclone`).
+- Your own Google OAuth client id (see `howto-google-oauth.md`) — the shared rclone default id is heavily rate-limited. The downloaded `client_secret_*.json` stays next to the scripts and is gitignored — **never commit it**.
+- An rclone remote for your Drive (default name `gdrive`, type `drive`, scope `drive`, client id/secret from the JSON): run `rclone config`; `rclone lsd gdrive:` must work.
+
+## Configuration
+
+Defaults live in `config.ps1`. For machine-specific values, copy `config.local.ps1.example` to `config.local.ps1` (gitignored) and override what differs:
+
+| Key | Meaning | Default |
+| --- | --- | --- |
+| `LocalRoot` | local mirror root | `D:\Meine Ablage` |
+| `RemoteName` | rclone remote name | `gdrive` |
+| `StateDir` | runtime state (logs, locks, cursors) | `%LOCALAPPDATA%\drive-sync` |
+| `MaxDeletes` | reactive delete cap per flush; larger storms go to the nightly bisync | `50` |
+| `PollSeconds` | Changes API poll interval | `60` |
+| `PacerMinSleep` / `PacerBurst` | Drive pacer tuning (safe with an own client id) | `10ms` / `200` |
 
 ## Installation
 
-1. Voraussetzungen oben herstellen (`rclone lsd gdrive:` muss funktionieren).
-2. `filters.txt` prüfen bzw. an den eigenen Korpus anpassen.
-3. Baseline erstellen: `pwsh -File sync-drive.ps1 -Resync` — der Erstlauf gleicht lokal und Cloud vollständig ab und kann mehrere Stunden dauern.
-4. `pwsh -File install-sync-task.ps1` — registriert den täglichen bisync (Standard 04:00, änderbar via `-DailyAt "HH:mm"`).
-5. `pwsh -File install-watcher-task.ps1` — registriert und startet beide Watcher plus den Watchdog.
-6. Kontrolle: `pwsh -File sync-status.ps1`.
+1. Meet the requirements above and adjust `config.local.ps1` and `filters.txt` for your corpus.
+2. Create the baseline: `pwsh -File sync-drive.ps1 -Resync` — the first run reconciles both sides completely and can take hours.
+3. `pwsh -File install-sync-task.ps1` — registers the daily bisync (default 04:00, change via `-DailyAt "HH:mm"`).
+4. `pwsh -File install-watcher-task.ps1` — registers and starts both watchers plus the watchdog.
+5. Check: `pwsh -File sync-status.ps1`.
 
-Alle Installer sind idempotent: erneutes Ausführen aktualisiert die Task-Definitionen, ohne laufende Watcher zu stören (bereits laufende Instanzen werden über ihre PID-Locks erkannt).
+All installers are idempotent: re-running updates the task definitions without disturbing running watchers (live instances are detected via their PID locks).
 
-### Manuelle Einrichtung (ohne Installer-Skripte)
+### Manual task setup (without the installer scripts)
 
-Die vier Tasks lassen sich auch von Hand in der Aufgabenplanung (`taskschd.msc`) anlegen — als angemeldeter Benutzer, «Nur ausführen, wenn der Benutzer angemeldet ist»:
+The four tasks can also be created by hand in Task Scheduler (`taskschd.msc`), as the logged-on user, "Run only when user is logged on":
 
-| Task | Trigger | Aktion | Einstellungen |
+| Task | Trigger | Action | Settings |
 | --- | --- | --- | --- |
-| `DriveSync watcher` | Bei Anmeldung | `wscript.exe` mit Argumenten `//B //Nologo "<repo>\drive-sync\run-hidden.vbs" "<pfad>\pwsh.exe" -NoProfile -File "<repo>\drive-sync\watch-drive.ps1"` | keine Zeitbeschränkung; neue Instanz nicht starten, wenn bereits aktiv |
-| `DriveSync cloud watcher` | Bei Anmeldung | wie oben, mit `watch-cloud.ps1` | wie oben |
-| `DriveSync watchdog` | Einmalig, danach alle 15 min wiederholen | wie oben, mit `watchdog.ps1` | Zeitbeschränkung 5 min; «So schnell wie möglich nach einem verpassten Start ausführen» |
-| `DriveSync rclone bisync` | Täglich 04:00 | `pwsh.exe` mit Argumenten `-NoProfile -WindowStyle Hidden -File "<repo>\drive-sync\sync-drive.ps1"` | Zeitbeschränkung 6 h; nur bei Netzwerkverbindung; verpasste Starts nachholen |
+| `DriveSync watcher` | At log on | `wscript.exe` with arguments `//B //Nologo "<repo>\run-hidden.vbs" "<path>\pwsh.exe" -NoProfile -File "<repo>\watch-drive.ps1"` | no time limit; do not start a new instance if one is running |
+| `DriveSync cloud watcher` | At log on | as above, with `watch-cloud.ps1` | as above |
+| `DriveSync watchdog` | Once, then repeat every 15 min | as above, with `watchdog.ps1` | time limit 5 min; run as soon as possible after a missed start |
+| `DriveSync rclone bisync` | Daily 04:00 | `pwsh.exe` with arguments `-NoProfile -WindowStyle Hidden -File "<repo>\sync-drive.ps1"` | time limit 6 h; only on network; run missed starts when available |
 
-Der Umweg über `wscript.exe` + `run-hidden.vbs` ist nötig, weil `pwsh -WindowStyle Hidden` beim Start trotzdem kurz ein Konsolenfenster aufblitzen lässt. Der bisync-Task läuft bewusst **ohne** Wrapper: Nur so kann seine 6-h-Zeitbeschränkung einen hängenden Lauf abbrechen — dafür blitzt bei einem nachgeholten Tageslauf einmal kurz ein Fenster auf (der reguläre 04:00-Lauf stört niemanden).
+Two hard-won details:
 
-Wichtig für alle vier Tasks: In den Bedingungen **«Nur starten, wenn Netzbetrieb» deaktivieren** und **«Beenden, wenn Akkubetrieb beginnt» deaktivieren**. Die PowerShell-Defaults (`New-ScheduledTaskSettingsSet`) setzen beides stillschweigend auf restriktiv — mit der Folge, dass Watcher beim Ziehen des Netzkabels hart beendet werden und Starts im Akkubetrieb in der Warteschlange hängen bleiben.
+- The `wscript.exe` + `run-hidden.vbs` detour exists because `pwsh -WindowStyle Hidden` still flashes a console window on start. The bisync task deliberately runs **without** the wrapper: only a directly launched process can be killed by its 6 h execution time limit.
+- For all four tasks, disable **"Start the task only if the computer is on AC power"** and **"Stop if the computer switches to battery power"**. The PowerShell `New-ScheduledTaskSettingsSet` defaults are silently restrictive — with them, pulling the power cord kills the watchers and task starts on battery hang in the queue.
 
-## Betrieb und Monitoring
+## Operations and monitoring
 
-Sämtlicher Laufzeit-State liegt unter `%LOCALAPPDATA%\drive-sync\`:
+All runtime state lives in the configured `StateDir` (default `%LOCALAPPDATA%\drive-sync\`):
 
-| Pfad | Inhalt |
+| Path | Content |
 | --- | --- |
-| `status.json` | letzter und letzter erfolgreicher bisync-Lauf |
-| `logs\bisync-*.log` | ein Log pro bisync-Lauf, die neuesten 30 werden behalten |
-| `watcher.log`, `cloud-watcher.log` | Watcher-Logs (Rotation bei 1 MB), inkl. 10-min-Heartbeats |
-| `watcher.lock`, `cloud-watcher.lock`, `sync.lock` | PID-Locks (Single-Instance bzw. bisync-Vorrang) |
-| `watcher-status.json`, `cloud-watcher-status.json` | Zähler für `sync-status.ps1` |
-| `cloud-watcher-pagetoken.txt` | persistenter Changes-API-Cursor; löschen = Neustart ab «jetzt» (Lücke schliesst der nächste bisync) |
-| `upload-ledger.txt` | Echo-Kontrolle: eigene Uploads der letzten 30 min |
-| `watcher-lastseen.txt`, `watcher-catchup.log` | Liveness-Stempel des Upload-Watchers («bis hierhin ist alles hochgeladen oder vom FSW erfasst» — rückt nur vor, wenn nichts pendent ist: nach erfolgreichem Flush bzw. im 10-min-Heartbeat) und Log des letzten Start-Catch-ups |
-| `watchdog.log`, `watchdog-pause` | Watchdog-Log; die Marker-Datei `watchdog-pause` unterdrückt Neustarts für Wartungsfenster (wird nach 6 h automatisch verworfen; steht in der ersten Zeile `pid:<n>`, gilt die Pause solange dieser Prozess lebt) |
-| `bin\rclone.exe` | optionaler Custom-Build (aktuell: v1.75.0 + `--files-from-strict`- und `--local-use-trash`-Backports); die Watcher bevorzugen ihn, Löschen fällt auf das PATH-rclone zurück |
+| `status.json` | last and last successful bisync run |
+| `logs\bisync-*.log` | one log per bisync run, newest 30 kept |
+| `watcher.log`, `cloud-watcher.log` | watcher logs (rotated at size limits), incl. 10-min heartbeats |
+| `watcher.lock`, `cloud-watcher.lock`, `sync.lock` | PID locks (single instance / bisync precedence) |
+| `watcher-status.json`, `cloud-watcher-status.json` | counters for `sync-status.ps1` |
+| `cloud-watcher-pagetoken.txt` | persisted Changes API cursor; deleting it restarts from "now" (the gap is closed by the next bisync) |
+| `upload-ledger.txt` | echo control: own uploads of the last 30 min |
+| `watcher-lastseen.txt`, `watcher-catchup.log` | liveness stamp of the upload watcher ("everything up to here is uploaded or captured" — only advances while nothing is pending) and the log of the last start-up catch-up |
+| `watchdog.log`, `watchdog-pause` | watchdog log; the `watchdog-pause` marker suppresses restarts during maintenance (auto-discarded after 6 h; a first line `pid:<n>` keeps the pause alive as long as that process runs) |
+| `bin\rclone.exe` | optional custom rclone build; the watchers prefer it, deleting it falls back to the PATH rclone |
 
-Nützliche Handgriffe: `pwsh -File sync-status.ps1` für den Gesamtstatus; `pwsh -File sync-drive.ps1` für einen manuellen bisync; für Wartung `Set-Content "$env:LOCALAPPDATA\drive-sync\watchdog-pause" "grund"` setzen und danach wieder löschen.
+Useful moves: `pwsh -File sync-status.ps1` for the overall picture; `pwsh -File sync-drive.ps1` for a manual bisync; for maintenance set `Set-Content "$env:LOCALAPPDATA\drive-sync\watchdog-pause" "reason"` (or `pid:<n>` as first line) and remove it afterwards.
 
-## Deinstallation
+## Uninstall
 
-Skriptiert: `pwsh -File uninstall.ps1` stoppt beide Watcher-Prozesse und entfernt alle vier Tasks; mit `-RemoveState` wird zusätzlich `%LOCALAPPDATA%\drive-sync` (Logs, Cursor, Custom-Build) gelöscht.
+Scripted: `pwsh -File uninstall.ps1` stops both watcher processes and removes all four tasks; `-RemoveState` also deletes the state directory.
 
-Manuell entspricht das diesen Schritten:
+Manually, that corresponds to:
 
-1. Watcher-Prozesse beenden: PIDs stehen in `%LOCALAPPDATA%\drive-sync\watcher.lock` und `cloud-watcher.lock` (`Stop-Process -Id <pid>`). Läuft gerade ein bisync (PID in `sync.lock` lebt), diesen zuerst ausrichten lassen.
-2. Die vier Tasks löschen: `schtasks /Delete /F /TN "DriveSync watcher"`, `... "DriveSync cloud watcher"`, `... "DriveSync watchdog"`, `... "DriveSync rclone bisync"` (oder in `taskschd.msc`).
-3. Optional den State löschen: `Remove-Item -Recurse -Force "$env:LOCALAPPDATA\drive-sync"`.
-4. Optional das rclone-Remote entfernen (`rclone config delete gdrive`) und den OAuth-Zugriff im Google-Konto widerrufen (Sicherheit → Verbindungen zu Drittanbieter-Apps).
+1. Stop the watcher processes: PIDs are in `watcher.lock` and `cloud-watcher.lock` inside the state dir (`Stop-Process -Id <pid>`). If a bisync is running (PID in `sync.lock` alive), let it finish first.
+2. Delete the four tasks: `schtasks /Delete /F /TN "DriveSync watcher"` etc. (or in `taskschd.msc`).
+3. Optionally delete the state: `Remove-Item -Recurse -Force "$env:LOCALAPPDATA\drive-sync"`.
+4. Optionally remove the rclone remote (`rclone config delete gdrive`) and revoke the OAuth access in your Google account.
 
-Die Deinstallation fasst **keine Nutzdaten** an: `D:\Meine Ablage` und der Cloud-Bestand bleiben unverändert, es endet lediglich die Synchronisation.
+Uninstalling never touches your data: the local mirror and the cloud content stay untouched, only the synchronisation ends.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
