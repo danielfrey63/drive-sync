@@ -21,7 +21,8 @@ $pwshExe = (Get-Command pwsh).Source
 $action = New-ScheduledTaskAction -Execute $pwshExe -Argument "-NoProfile -WindowStyle Hidden -File `"$script`""
 $trigger = New-ScheduledTaskTrigger -Daily -At $DailyAt
 $settings = New-ScheduledTaskSettingsSet -RunOnlyIfNetworkAvailable -StartWhenAvailable `
-    -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 6)
+    -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 6) `
+    -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
     -Settings $settings -Description "Bidirectional Google Drive sync via rclone bisync (ai-toolbox/drive-sync)" -Force | Out-Null

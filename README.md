@@ -3,7 +3,7 @@
 Ersetzt Google DriveFS (stillgelegt 08/2026, Hintergrund im [Handover](HANDOVER-2026-07-30-drivefs-rclone.md)) durch einen dreistufigen Sync:
 
 1. **Nacht-bisync** (täglich 04:00): `sync-drive.ps1` fährt einen vollen `rclone bisync` als Auffangnetz für alles, was die Watcher nicht abdecken (Konflikte, Verzeichnis-Renames in der Cloud, verpasste Events). Ein Volllauf listet ~1.6 Mio. Dateien und braucht ~25 Minuten.
-2. **Upload-Watcher** (`watch-drive.ps1`, permanent): FileSystemWatcher auf `D:\Meine Ablage`, lädt neue/geänderte Dateien nach ~20–40 s hoch, propagiert Renames server-seitig (`moveto`) und verifizierte Deletes in den **Drive-Papierkorb** (Cap: 50 pro Flush).
+2. **Upload-Watcher** (`watch-drive.ps1`, permanent): FileSystemWatcher auf `D:\Meine Ablage`, lädt neue/geänderte Dateien nach ~20–40 s hoch, propagiert Renames server-seitig (`moveto`) und verifizierte Deletes in den **Drive-Papierkorb** (Cap: 50 pro Flush). Beim Start holt ein Catch-up (`rclone copy --max-age` über die Zeit seit dem letzten Liveness-Stempel) Dateien nach, die während eines Watcher-Ausfalls entstanden sind — Deletes/Renames aus der Lücke bleiben dem Nacht-bisync überlassen.
 3. **Cloud-Watcher** (`watch-cloud.ps1`, permanent): pollt die Google-Drive-Changes-API im 60-s-Takt, lädt neue/geänderte Cloud-Dateien nach ~1–2 min herunter und verschiebt cloud-seitig Gelöschtes in den **Windows-Papierkorb** (Cap: 50). Eigene Uploads werden über ein Ledger erkannt und übersprungen (Echo-Kontrolle).
 
 Grundprinzip: **Nichts wird hart gelöscht** — Löschungen landen immer im jeweiligen Papierkorb (Drive-Trash 30 Tage bzw. Windows-Papierkorb).
@@ -55,6 +55,8 @@ Die vier Tasks lassen sich auch von Hand in der Aufgabenplanung (`taskschd.msc`)
 
 Der Umweg über `wscript.exe` + `run-hidden.vbs` ist nötig, weil `pwsh -WindowStyle Hidden` beim Start trotzdem kurz ein Konsolenfenster aufblitzen lässt. Der bisync-Task läuft bewusst **ohne** Wrapper: Nur so kann seine 6-h-Zeitbeschränkung einen hängenden Lauf abbrechen — dafür blitzt bei einem nachgeholten Tageslauf einmal kurz ein Fenster auf (der reguläre 04:00-Lauf stört niemanden).
 
+Wichtig für alle vier Tasks: In den Bedingungen **«Nur starten, wenn Netzbetrieb» deaktivieren** und **«Beenden, wenn Akkubetrieb beginnt» deaktivieren**. Die PowerShell-Defaults (`New-ScheduledTaskSettingsSet`) setzen beides stillschweigend auf restriktiv — mit der Folge, dass Watcher beim Ziehen des Netzkabels hart beendet werden und Starts im Akkubetrieb in der Warteschlange hängen bleiben.
+
 ## Betrieb und Monitoring
 
 Sämtlicher Laufzeit-State liegt unter `%LOCALAPPDATA%\drive-sync\`:
@@ -68,6 +70,7 @@ Sämtlicher Laufzeit-State liegt unter `%LOCALAPPDATA%\drive-sync\`:
 | `watcher-status.json`, `cloud-watcher-status.json` | Zähler für `sync-status.ps1` |
 | `cloud-watcher-pagetoken.txt` | persistenter Changes-API-Cursor; löschen = Neustart ab «jetzt» (Lücke schliesst der nächste bisync) |
 | `upload-ledger.txt` | Echo-Kontrolle: eigene Uploads der letzten 30 min |
+| `watcher-lastseen.txt`, `watcher-catchup.log` | Liveness-Stempel des Upload-Watchers (alle 10 min erneuert) und Log des letzten Start-Catch-ups |
 | `watchdog.log`, `watchdog-pause` | Watchdog-Log; die Marker-Datei `watchdog-pause` unterdrückt Neustarts für Wartungsfenster (wird nach 6 h automatisch verworfen; steht in der ersten Zeile `pid:<n>`, gilt die Pause solange dieser Prozess lebt) |
 | `bin\rclone.exe` | optionaler Custom-Build (aktuell: v1.75.0 + `--files-from-strict`- und `--local-use-trash`-Backports); die Watcher bevorzugen ihn, Löschen fällt auf das PATH-rclone zurück |
 

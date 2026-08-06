@@ -1,8 +1,9 @@
 # Watchdog for the two drive-sync watchers: restarts their scheduled tasks
 # if the recorded PID is no longer alive (both watchers died silently at the
-# same minute on 2026-08-05, most likely killed by a system-level event -
-# scheduler-side restart-on-failure did not trigger). Runs every 15 min via
-# the "DriveSync watchdog" task (install-watcher-task.ps1). Idempotent.
+# same minute on 2026-08-05; root cause found 2026-08-06: the scheduler's
+# StopIfGoingOnBatteries default killed them when the power cord was pulled -
+# fixed in install-watcher-task.ps1, watchdog stays as second line of
+# defence). Runs every 15 min via the "DriveSync watchdog" task. Idempotent.
 #
 # Touch %LOCALAPPDATA%\drive-sync\watchdog-pause to suppress restarts during
 # maintenance (ignored and removed when older than 6 h). For maintenance that

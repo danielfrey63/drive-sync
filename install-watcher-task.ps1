@@ -33,9 +33,12 @@ $paused = Test-Path (Join-Path $stateDir "watchdog-pause")
 foreach ($t in $tasks) {
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     # no time limit: if the scheduler's job object tracks the detached pwsh,
-    # a limit would kill the long-running watcher
+    # a limit would kill the long-running watcher. Battery flags matter: the
+    # cmdlet defaults silently refuse to start and even STOP tasks on battery
+    # (this killed both watchers when the power cord was pulled, 2026-08-05).
     $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew `
-        -ExecutionTimeLimit ([TimeSpan]::Zero)
+        -ExecutionTimeLimit ([TimeSpan]::Zero) `
+        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $t.Name -Action (New-HiddenAction $t.Script) `
         -Trigger $trigger -Settings $settings -Description $t.Description -Force | Out-Null
 
@@ -55,7 +58,8 @@ foreach ($t in $tasks) {
 # watchdog: restarts silently died watchers (see watchdog.ps1)
 $wdTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5) -RepetitionInterval (New-TimeSpan -Minutes 15)
 $wdSettings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 5) `
+    -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName "DriveSync watchdog" -Action (New-HiddenAction (Join-Path $PSScriptRoot "watchdog.ps1")) `
     -Trigger $wdTrigger -Settings $wdSettings -Description "Restarts died DriveSync watchers (ai-toolbox/drive-sync)" -Force | Out-Null
 Write-Host "Task 'DriveSync watchdog' registered (every 15 min)."
