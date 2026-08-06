@@ -15,6 +15,11 @@
 #  - Exclude rules are DERIVED FROM filters.txt (shared filter-rules.ps1).
 #  - While the bisync wrapper's lock is active, flushing is deferred.
 #  - Watcher buffer overflows are only logged: the nightly bisync catches up.
+#  - Start-up catch-up: a liveness stamp (watcher-lastseen.txt, refreshed with
+#    every heartbeat) marks the last covered moment; on start, files modified
+#    since then are uploaded via "rclone copy --max-age" so a watcher outage
+#    no longer parks new files until the nightly bisync. Deletes/renames from
+#    the gap remain bisync territory.
 #
 # Meant to run permanently via the "DriveSync watcher" logon task
 # (install-watcher-task.ps1). Single instance enforced by a PID lock.
@@ -128,6 +133,46 @@ function Add-LedgerEntries([string[]]$rels) {
     catch { Write-Log "WARN ledger update failed: $($_.Exception.Message)" }
 }
 
+# --- start-up catch-up ------------------------------------------------------
+# The FSW is already live at this point, so there is no coverage gap: files
+# changed while no watcher was running are copied up; unchanged candidates
+# are skipped by the size+modtime compare, --update never overwrites newer
+# cloud versions. The full local listing takes a few minutes; FSW events
+# raised meanwhile simply queue up for the main loop.
+$lastSeenFile = Join-Path $stateDir "watcher-lastseen.txt"
+try {
+    $lastSeen = $null
+    if (Test-Path $lastSeenFile) {
+        try { $lastSeen = [datetime]::Parse((Get-Content $lastSeenFile -TotalCount 1), $null, [System.Globalization.DateTimeStyles]::RoundtripKind) } catch {}
+    }
+    $bisyncPid = Get-Content $bisyncLock -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($bisyncPid -and (Get-Process -Id $bisyncPid -ErrorAction SilentlyContinue)) {
+        Write-Log "catch-up skipped: bisync (PID $bisyncPid) is running and reconciles the gap"
+    }
+    elseif ($null -eq $lastSeen) {
+        Write-Log "catch-up skipped: no liveness stamp yet (first run)"
+    }
+    else {
+        # 5 min margin on top of the gap for clock skew and rounding
+        $maxAge = [math]::Ceiling(((Get-Date) - $lastSeen).TotalSeconds) + 300
+        $cuLog = Join-Path $stateDir "watcher-catchup.log"
+        Remove-Item $cuLog -Force -Confirm:$false -ErrorAction SilentlyContinue
+        & $rcloneExe copy $root $remote --max-age "${maxAge}s" --filter-from $filters `
+            --no-traverse --update --modify-window 1s @pacer --transfers 4 `
+            --log-level INFO --log-file $cuLog 2>$null
+        $cuExit = $LASTEXITCODE
+        $copied = @()
+        if (Test-Path $cuLog) {
+            $copied = @(Select-String -Path $cuLog -Pattern 'INFO\s+: (.+): Copied \(' |
+                ForEach-Object { $_.Matches[0].Groups[1].Value -replace '/', '\' })
+        }
+        if ($copied.Count -gt 0) { Add-LedgerEntries $copied }
+        Write-Log "catch-up: gap since $($lastSeen.ToString('s')), $($copied.Count) file(s) uploaded, exit=$cuExit"
+    }
+}
+catch { Write-Log "WARN catch-up failed: $($_.Exception.Message)" }
+Set-Content $lastSeenFile ((Get-Date).ToString("o"))
+
 # --- main loop: debounce and flush ------------------------------------------
 $lastHeartbeat = Get-Date
 try {
@@ -136,6 +181,8 @@ try {
         if (((Get-Date) - $lastHeartbeat).TotalMinutes -ge 10) {
             Write-Log "heartbeat: $($pending.Count) up / $($renames.Count) ren / $($deletes.Count) del pending"
             $lastHeartbeat = Get-Date
+            # liveness stamp for the start-up catch-up window
+            try { Set-Content $lastSeenFile ((Get-Date).ToString("o")) } catch {}
         }
         $drained = 0
         foreach ($evt in @(Get-Event)) {
