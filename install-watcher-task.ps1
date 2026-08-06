@@ -8,10 +8,11 @@
 # single instance via their PID lock files.
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "config.ps1")
 $pwshExe = (Get-Command pwsh).Source
 $wscript = Join-Path $env:SystemRoot "System32\wscript.exe"
 $wrapper = Join-Path $PSScriptRoot "run-hidden.vbs"
-$stateDir = Join-Path $env:LOCALAPPDATA "drive-sync"
+$stateDir = $DriveSyncConfig.StateDir
 
 function New-HiddenAction([string]$script) {
     New-ScheduledTaskAction -Execute $wscript `
@@ -21,10 +22,10 @@ function New-HiddenAction([string]$script) {
 $tasks = @(
     @{ Name = "DriveSync watcher"; Script = Join-Path $PSScriptRoot "watch-drive.ps1"
        Lock = Join-Path $stateDir "watcher.lock"
-       Description = "Near-realtime upload watcher for D:\Meine Ablage (ai-toolbox/drive-sync)" }
+       Description = "Near-realtime upload watcher for $($DriveSyncConfig.LocalRoot) (drive-sync)" }
     @{ Name = "DriveSync cloud watcher"; Script = Join-Path $PSScriptRoot "watch-cloud.ps1"
        Lock = Join-Path $stateDir "cloud-watcher.lock"
-       Description = "Near-realtime download watcher for gdrive: changes (ai-toolbox/drive-sync)" }
+       Description = "Near-realtime download watcher for $($DriveSyncConfig.Remote) changes (drive-sync)" }
 )
 
 # during maintenance (watchdog-pause marker) only register, never start
@@ -61,5 +62,5 @@ $wdSettings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWh
     -ExecutionTimeLimit (New-TimeSpan -Minutes 5) `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName "DriveSync watchdog" -Action (New-HiddenAction (Join-Path $PSScriptRoot "watchdog.ps1")) `
-    -Trigger $wdTrigger -Settings $wdSettings -Description "Restarts died DriveSync watchers (ai-toolbox/drive-sync)" -Force | Out-Null
+    -Trigger $wdTrigger -Settings $wdSettings -Description "Restarts died DriveSync watchers (drive-sync)" -Force | Out-Null
 Write-Host "Task 'DriveSync watchdog' registered (every 15 min)."

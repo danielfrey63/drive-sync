@@ -1,0 +1,7 @@
+# downloaded Google OAuth client secret - never commit
+client_secret_*.json
+# machine-specific overrides
+config.local.ps1
+# local artefacts
+*.log
+filters.txt.md5

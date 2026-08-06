@@ -25,19 +25,20 @@
 # (install-watcher-task.ps1). Single instance enforced by a PID lock.
 
 $ErrorActionPreference = "Stop"
-$root = "D:\Meine Ablage"
-$remote = "gdrive:"
+. (Join-Path $PSScriptRoot "config.ps1")
+$root = $DriveSyncConfig.LocalRoot
+$remote = $DriveSyncConfig.Remote
 $filters = Join-Path $PSScriptRoot "filters.txt"
-$stateDir = Join-Path $env:LOCALAPPDATA "drive-sync"
+$stateDir = $DriveSyncConfig.StateDir
 $logFile = Join-Path $stateDir "watcher.log"
 $statusFile = Join-Path $stateDir "watcher-status.json"
 $lockFile = Join-Path $stateDir "watcher.lock"
 $bisyncLock = Join-Path $stateDir "sync.lock"
 $lastSeenFile = Join-Path $stateDir "watcher-lastseen.txt"
-$maxDeletes = 50
-$pacer = @("--drive-pacer-min-sleep", "10ms", "--drive-pacer-burst", "200")
+$maxDeletes = $DriveSyncConfig.MaxDeletes
+$pacer = $DriveSyncConfig.Pacer
 # custom build (release + --files-from-strict backport) if deployed, else PATH rclone
-$rcloneExe = Join-Path $env:LOCALAPPDATA "drive-sync\bin\rclone.exe"
+$rcloneExe = Join-Path $stateDir "bin\rclone.exe"
 if (-not (Test-Path $rcloneExe)) { $rcloneExe = "rclone" }
 elseif (-not $env:RCLONE_CONFIG) {
     # the custom build defaults to %APPDATA%, but scoop keeps the config in its

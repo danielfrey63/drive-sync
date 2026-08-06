@@ -25,5 +25,5 @@ $settings = New-ScheduledTaskSettingsSet -RunOnlyIfNetworkAvailable -StartWhenAv
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
-    -Settings $settings -Description "Bidirectional Google Drive sync via rclone bisync (ai-toolbox/drive-sync)" -Force | Out-Null
+    -Settings $settings -Description "Bidirectional Google Drive sync via rclone bisync (drive-sync)" -Force | Out-Null
 Write-Host "Scheduled task '$TaskName' registered (daily at $DailyAt, missed runs start when available)."

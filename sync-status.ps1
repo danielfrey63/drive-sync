@@ -1,5 +1,6 @@
 # Shows the drive-sync status: last run, last success, tail of the last log.
-$statusFile = Join-Path $env:LOCALAPPDATA "drive-sync\status.json"
+. (Join-Path $PSScriptRoot "config.ps1")
+$statusFile = Join-Path $DriveSyncConfig.StateDir "status.json"
 if (-not (Test-Path $statusFile)) { Write-Host "No sync run recorded yet."; exit 1 }
 $s = Get-Content $statusFile -Raw | ConvertFrom-Json
 "Last run:     $($s.lastRun.start)  exit=$($s.lastRun.exitCode)  $($s.lastRun.minutes) min $(if ($s.lastRun.dryRun) { '(dry-run)' })"
@@ -8,20 +9,17 @@ if ($s.lastSuccess) {
     "Last success: $($s.lastSuccess.end)  ($age h ago)"
 }
 else { "Last success: NEVER" }
-$w = Join-Path $env:LOCALAPPDATA "drive-sync\watcher-status.json"
-if (Test-Path $w) {
-    $ws = Get-Content $w -Raw | ConvertFrom-Json
-    $alive = [bool](Get-Process -Id $ws.pid -ErrorAction SilentlyContinue)
-    "Watcher up:   $(if ($alive) { "running (PID $($ws.pid))" } else { 'NOT RUNNING' })  lastFlush=$($ws.lastFlush)  up=$($ws.uploadedTotal) ren=$($ws.renamedTotal) del=$($ws.deletedTotal)"
+# liveness comes from the PID lock (the status json only updates on flushes)
+function Get-WatcherLine([string]$label, [string]$lockName, [string]$statusName, [scriptblock]$counters) {
+    $pid_ = Get-Content (Join-Path $DriveSyncConfig.StateDir $lockName) -ErrorAction SilentlyContinue | Select-Object -First 1
+    $alive = $pid_ -and (Get-Process -Id $pid_ -ErrorAction SilentlyContinue)
+    $sf = Join-Path $DriveSyncConfig.StateDir $statusName
+    $s = if (Test-Path $sf) { Get-Content $sf -Raw | ConvertFrom-Json }
+    $stats = if ($s) { "lastFlush=$($s.lastFlush)  $(& $counters $s)" } else { "no flush recorded yet" }
+    "{0} $(if ($alive) { "running (PID $pid_)" } else { 'NOT RUNNING' })  $stats" -f $label
 }
-else { "Watcher up:   no flush recorded yet" }
-$c = Join-Path $env:LOCALAPPDATA "drive-sync\cloud-watcher-status.json"
-if (Test-Path $c) {
-    $cs = Get-Content $c -Raw | ConvertFrom-Json
-    $calive = [bool](Get-Process -Id $cs.pid -ErrorAction SilentlyContinue)
-    "Watcher down: $(if ($calive) { "running (PID $($cs.pid))" } else { 'NOT RUNNING' })  lastFlush=$($cs.lastFlush)  down=$($cs.downloadedTotal) recycled=$($cs.recycledTotal)"
-}
-else { "Watcher down: no flush recorded yet" }
+Get-WatcherLine "Watcher up:  " "watcher.lock" "watcher-status.json" { param($s) "up=$($s.uploadedTotal) ren=$($s.renamedTotal) del=$($s.deletedTotal)" }
+Get-WatcherLine "Watcher down:" "cloud-watcher.lock" "cloud-watcher-status.json" { param($s) "down=$($s.downloadedTotal) recycled=$($s.recycledTotal)" }
 if ($s.lastRun.log -and (Test-Path $s.lastRun.log)) {
     ""
     "--- log tail ---"

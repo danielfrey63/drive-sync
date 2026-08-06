@@ -11,7 +11,8 @@
 # long as that process is alive, regardless of age (lesson from 2026-08-06,
 # when a >6 h dedupe run lost its pause and a watcher restarted mid-cleanup).
 
-$stateDir = Join-Path $env:LOCALAPPDATA "drive-sync"
+. (Join-Path $PSScriptRoot "config.ps1")
+$stateDir = $DriveSyncConfig.StateDir
 $logFile = Join-Path $stateDir "watchdog.log"
 $pauseFile = Join-Path $stateDir "watchdog-pause"
 

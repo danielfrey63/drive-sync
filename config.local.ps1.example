@@ -1,0 +1,7 @@
+# Machine-specific overrides for config.ps1.
+# Copy to config.local.ps1 (gitignored) and adjust what differs on this box.
+
+$DriveSyncConfig.LocalRoot = "C:\Users\me\GoogleDrive"
+$DriveSyncConfig.RemoteName = "gdrive"
+# $DriveSyncConfig.MaxDeletes = 50
+# $DriveSyncConfig.PollSeconds = 60

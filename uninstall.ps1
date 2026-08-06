@@ -12,7 +12,8 @@ param(
     [switch]$RemoveState
 )
 
-$stateDir = Join-Path $env:LOCALAPPDATA "drive-sync"
+. (Join-Path $PSScriptRoot "config.ps1")
+$stateDir = $DriveSyncConfig.StateDir
 $taskNames = @("DriveSync watcher", "DriveSync cloud watcher", "DriveSync watchdog", "DriveSync rclone bisync")
 
 # refuse to pull the rug from under a running bisync
@@ -48,4 +49,4 @@ elseif (Test-Path $stateDir) {
     Write-Host "State directory kept: $stateDir (delete with -RemoveState)."
 }
 
-Write-Host "Done. Data in 'D:\Meine Ablage' and the rclone config were not touched."
+Write-Host "Done. Data in '$($DriveSyncConfig.LocalRoot)' and the rclone config were not touched."

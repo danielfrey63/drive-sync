@@ -21,10 +21,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$localPath = "D:\Meine Ablage"
-$remote = "gdrive:"
+. (Join-Path $PSScriptRoot "config.ps1")
+$localPath = $DriveSyncConfig.LocalRoot
+$remote = $DriveSyncConfig.Remote
 $filters = Join-Path $PSScriptRoot "filters.txt"
-$stateDir = Join-Path $env:LOCALAPPDATA "drive-sync"
+$stateDir = $DriveSyncConfig.StateDir
 $logDir = Join-Path $stateDir "logs"
 $lockFile = Join-Path $stateDir "sync.lock"
 $statusFile = Join-Path $stateDir "status.json"
@@ -52,8 +53,7 @@ try {
         "--drive-skip-dangling-shortcuts"
         "--modify-window", "1s"
         "--fast-list"
-        "--drive-pacer-min-sleep", "10ms"
-        "--drive-pacer-burst", "200"
+    ) + $DriveSyncConfig.Pacer + @(
         "--checkers", "16"
         "--transfers", "8"
         "--drive-chunk-size", "64M"

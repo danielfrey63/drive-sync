@@ -32,25 +32,27 @@
 # -Once runs a single poll+flush cycle (for testing).
 
 param(
-    [int]$PollSeconds = 60,
+    [int]$PollSeconds = 0,   # 0 = use the configured default
     [switch]$Once
 )
 
 $ErrorActionPreference = "Stop"
-$root = "D:\Meine Ablage"
-$remoteName = "gdrive"
-$stateDir = Join-Path $env:LOCALAPPDATA "drive-sync"
+. (Join-Path $PSScriptRoot "config.ps1")
+$root = $DriveSyncConfig.LocalRoot
+$remoteName = $DriveSyncConfig.RemoteName
+if ($PollSeconds -le 0) { $PollSeconds = $DriveSyncConfig.PollSeconds }
+$stateDir = $DriveSyncConfig.StateDir
 $logFile = Join-Path $stateDir "cloud-watcher.log"
 $statusFile = Join-Path $stateDir "cloud-watcher-status.json"
 $lockFile = Join-Path $stateDir "cloud-watcher.lock"
 $tokenFile = Join-Path $stateDir "cloud-watcher-pagetoken.txt"
 $bisyncLock = Join-Path $stateDir "sync.lock"
-$maxDeletes = 50
+$maxDeletes = $DriveSyncConfig.MaxDeletes
 New-Item -ItemType Directory -Force $stateDir | Out-Null
 # custom build (release + --files-from-strict backport) if deployed, else PATH
 # rclone. Downloads deliberately do NOT use --files-from-strict: a file may
 # legitimately vanish in the cloud between change event and flush.
-$rcloneExe = Join-Path $env:LOCALAPPDATA "drive-sync\bin\rclone.exe"
+$rcloneExe = Join-Path $stateDir "bin\rclone.exe"
 if (-not (Test-Path $rcloneExe)) { $rcloneExe = "rclone" }
 elseif (-not $env:RCLONE_CONFIG) {
     # the custom build defaults to %APPDATA%, but scoop keeps the config in its
@@ -294,7 +296,7 @@ try {
                         # rclone expects "/" separators for remote paths in --files-from
                         Set-Content -Path $batchFile -Value @($batch | ForEach-Object { $_ -replace '\\', '/' }) -Encoding UTF8
                         & $rcloneExe copy "${remoteName}:" $root --files-from-raw $batchFile --no-traverse --update `
-                            --modify-window 1s --drive-pacer-min-sleep 10ms --drive-pacer-burst 200 `
+                            --modify-window 1s @($DriveSyncConfig.Pacer) `
                             --transfers 4 --log-level INFO --log-file $logFile 2>$null
                         $exit = $LASTEXITCODE
                         $downloadedTotal += $batch.Count
