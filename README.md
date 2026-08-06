@@ -70,7 +70,7 @@ Sämtlicher Laufzeit-State liegt unter `%LOCALAPPDATA%\drive-sync\`:
 | `watcher-status.json`, `cloud-watcher-status.json` | Zähler für `sync-status.ps1` |
 | `cloud-watcher-pagetoken.txt` | persistenter Changes-API-Cursor; löschen = Neustart ab «jetzt» (Lücke schliesst der nächste bisync) |
 | `upload-ledger.txt` | Echo-Kontrolle: eigene Uploads der letzten 30 min |
-| `watcher-lastseen.txt`, `watcher-catchup.log` | Liveness-Stempel des Upload-Watchers (alle 10 min erneuert) und Log des letzten Start-Catch-ups |
+| `watcher-lastseen.txt`, `watcher-catchup.log` | Liveness-Stempel des Upload-Watchers («bis hierhin ist alles hochgeladen oder vom FSW erfasst» — rückt nur vor, wenn nichts pendent ist: nach erfolgreichem Flush bzw. im 10-min-Heartbeat) und Log des letzten Start-Catch-ups |
 | `watchdog.log`, `watchdog-pause` | Watchdog-Log; die Marker-Datei `watchdog-pause` unterdrückt Neustarts für Wartungsfenster (wird nach 6 h automatisch verworfen; steht in der ersten Zeile `pid:<n>`, gilt die Pause solange dieser Prozess lebt) |
 | `bin\rclone.exe` | optionaler Custom-Build (aktuell: v1.75.0 + `--files-from-strict`- und `--local-use-trash`-Backports); die Watcher bevorzugen ihn, Löschen fällt auf das PATH-rclone zurück |
 

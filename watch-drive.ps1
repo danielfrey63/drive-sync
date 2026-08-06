@@ -33,6 +33,7 @@ $logFile = Join-Path $stateDir "watcher.log"
 $statusFile = Join-Path $stateDir "watcher-status.json"
 $lockFile = Join-Path $stateDir "watcher.lock"
 $bisyncLock = Join-Path $stateDir "sync.lock"
+$lastSeenFile = Join-Path $stateDir "watcher-lastseen.txt"
 $maxDeletes = 50
 $pacer = @("--drive-pacer-min-sleep", "10ms", "--drive-pacer-burst", "200")
 # custom build (release + --files-from-strict backport) if deployed, else PATH rclone
@@ -139,7 +140,11 @@ function Add-LedgerEntries([string[]]$rels) {
 # are skipped by the size+modtime compare, --update never overwrites newer
 # cloud versions. The full local listing takes a few minutes; FSW events
 # raised meanwhile simply queue up for the main loop.
-$lastSeenFile = Join-Path $stateDir "watcher-lastseen.txt"
+#
+# The liveness stamp means "everything modified up to this moment is uploaded
+# or captured by the live FSW". It therefore only advances on a SUCCESSFUL
+# catch-up (to the catch-up START time, so changes made during the run stay
+# covered) and later only while no work is pending (see Update-LastSeen).
 try {
     $lastSeen = $null
     if (Test-Path $lastSeenFile) {
@@ -147,14 +152,17 @@ try {
     }
     $bisyncPid = Get-Content $bisyncLock -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($bisyncPid -and (Get-Process -Id $bisyncPid -ErrorAction SilentlyContinue)) {
+        # stamp untouched: the bisync reconciles the gap, the heartbeat takes over
         Write-Log "catch-up skipped: bisync (PID $bisyncPid) is running and reconciles the gap"
     }
     elseif ($null -eq $lastSeen) {
         Write-Log "catch-up skipped: no liveness stamp yet (first run)"
+        Set-Content $lastSeenFile ((Get-Date).ToString("o"))
     }
     else {
+        $cuStart = Get-Date
         # 5 min margin on top of the gap for clock skew and rounding
-        $maxAge = [math]::Ceiling(((Get-Date) - $lastSeen).TotalSeconds) + 300
+        $maxAge = [math]::Ceiling(($cuStart - $lastSeen).TotalSeconds) + 300
         $cuLog = Join-Path $stateDir "watcher-catchup.log"
         Remove-Item $cuLog -Force -Confirm:$false -ErrorAction SilentlyContinue
         & $rcloneExe copy $root $remote --max-age "${maxAge}s" --filter-from $filters `
@@ -168,10 +176,18 @@ try {
         }
         if ($copied.Count -gt 0) { Add-LedgerEntries $copied }
         Write-Log "catch-up: gap since $($lastSeen.ToString('s')), $($copied.Count) file(s) uploaded, exit=$cuExit"
+        if ($cuExit -eq 0) { Set-Content $lastSeenFile ($cuStart.ToString("o")) }
     }
 }
 catch { Write-Log "WARN catch-up failed: $($_.Exception.Message)" }
-Set-Content $lastSeenFile ((Get-Date).ToString("o"))
+
+# Advance the liveness stamp only when every queue is empty: pending work
+# lies BEFORE now, and stamping over it would hide it from the next catch-up.
+function Update-LastSeen {
+    if (($pending.Count + $renames.Count + $deletes.Count) -eq 0) {
+        try { Set-Content $lastSeenFile ((Get-Date).ToString("o")) } catch {}
+    }
+}
 
 # --- main loop: debounce and flush ------------------------------------------
 $lastHeartbeat = Get-Date
@@ -181,8 +197,7 @@ try {
         if (((Get-Date) - $lastHeartbeat).TotalMinutes -ge 10) {
             Write-Log "heartbeat: $($pending.Count) up / $($renames.Count) ren / $($deletes.Count) del pending"
             $lastHeartbeat = Get-Date
-            # liveness stamp for the start-up catch-up window
-            try { Set-Content $lastSeenFile ((Get-Date).ToString("o")) } catch {}
+            Update-LastSeen
         }
         $drained = 0
         foreach ($evt in @(Get-Event)) {
@@ -304,6 +319,8 @@ try {
             }
 
             Write-Status
+            # a fully drained flush is the freshest safe point for the stamp
+            Update-LastSeen
         }
         catch {
             Write-Log "ERROR flush cycle: $($_.Exception.Message)"
