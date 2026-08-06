@@ -5,7 +5,10 @@
 # the "DriveSync watchdog" task (install-watcher-task.ps1). Idempotent.
 #
 # Touch %LOCALAPPDATA%\drive-sync\watchdog-pause to suppress restarts during
-# maintenance (ignored and removed when older than 6 h).
+# maintenance (ignored and removed when older than 6 h). For maintenance that
+# may run longer, write "pid:<n>" as the first line: the pause then holds as
+# long as that process is alive, regardless of age (lesson from 2026-08-06,
+# when a >6 h dedupe run lost its pause and a watcher restarted mid-cleanup).
 
 $stateDir = Join-Path $env:LOCALAPPDATA "drive-sync"
 $logFile = Join-Path $stateDir "watchdog.log"
@@ -22,7 +25,12 @@ function Write-Log([string]$msg) {
 }
 
 if (Test-Path $pauseFile) {
-    if ((Get-Item $pauseFile).LastWriteTime -gt (Get-Date).AddHours(-6)) {
+    $ownerAlive = $false
+    $firstLine = Get-Content $pauseFile -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($firstLine -match '^pid:(\d+)$') {
+        $ownerAlive = [bool](Get-Process -Id $Matches[1] -ErrorAction SilentlyContinue)
+    }
+    if ($ownerAlive -or (Get-Item $pauseFile).LastWriteTime -gt (Get-Date).AddHours(-6)) {
         Write-Log "paused (watchdog-pause present) - skipping"
         exit 0
     }
