@@ -47,6 +47,13 @@ elseif (-not $env:RCLONE_CONFIG) {
     if ($cfg -and (Test-Path $cfg)) { $env:RCLONE_CONFIG = $cfg }
 }
 New-Item -ItemType Directory -Force $stateDir | Out-Null
+# --files-from-strict is a pending upstream contribution (rclone PR #9598):
+# with it, a stale path mapping fails the batch loudly instead of being
+# skipped silently. Detected at runtime so a stock rclone release works too.
+$strictFlag = @()
+if (& $rcloneExe help flags files-from-strict 2>$null | Select-String -Quiet "files-from-strict") {
+    $strictFlag = @("--files-from-strict")
+}
 
 function Write-Log([string]$msg) {
     # logging must never kill the watcher
@@ -279,9 +286,7 @@ try {
                 $batchFile = Join-Path $stateDir "watcher-batch.txt"
                 # rclone expects "/" separators for the gdrive: destination side too
                 Set-Content -Path $batchFile -Value @($batch | ForEach-Object { $_ -replace '\\', '/' }) -Encoding UTF8
-                # --files-from-strict (backported): a wrong path mapping now fails
-                # loudly instead of being skipped silently
-                & $rcloneExe copy $root $remote --files-from-raw $batchFile --no-traverse --files-from-strict `
+                & $rcloneExe copy $root $remote --files-from-raw $batchFile --no-traverse @strictFlag `
                     --modify-window 1s @pacer --transfers 4 --log-level INFO --log-file $logFile 2>$null
                 $exit = $LASTEXITCODE
                 Write-Log "flush: $($batch.Count) file(s), exit=$exit"

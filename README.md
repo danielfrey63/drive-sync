@@ -94,6 +94,16 @@ All runtime state lives in the configured `StateDir` (default `%LOCALAPPDATA%\dr
 
 Useful moves: `pwsh -File sync-status.ps1` for the overall picture; `pwsh -File sync-drive.ps1` for a manual bisync; for maintenance set `Set-Content "$env:LOCALAPPDATA\drive-sync\watchdog-pause" "reason"` (or `pid:<n>` as first line) and remove it afterwards.
 
+## Relation to rclone upstream
+
+Everything here rides on [rclone](https://github.com/rclone/rclone) (`bisync`, `copy`, `moveto`, the Drive backend). Building this produced three upstream contributions, currently in flight:
+
+- **[PR #9598](https://github.com/rclone/rclone/pull/9598) — `--files-from-strict`** (review + testing contributed): makes `copy --files-from` fail loudly when a listed path is missing instead of skipping it silently. The upload watcher uses the flag when available — a stale path mapping then fails the batch and triggers a retry instead of dropping files.
+- **[Issue #9737](https://github.com/rclone/rclone/issues/9737) / [PR #9741](https://github.com/rclone/rclone/pull/9741) — `--local-use-trash`**: teaches the local backend to move deletions to the Windows recycle bin (or freedesktop/macOS trash) instead of hard-deleting. The cloud watcher uses it for cloud-trash propagation when available, with a Win32 `SHFileOperation` fallback otherwise.
+- **[Issue #9738](https://github.com/rclone/rclone/issues/9738) — `rclone changes`**: proposal for a first-class change-polling command; if it lands, it replaces most of the custom Changes API code in `watch-cloud.ps1`.
+
+Both watchers detect these flags at runtime and degrade gracefully, so a **stock rclone release works out of the box**. To use the pending features today, build rclone from a branch containing the backports and drop the binary at `<StateDir>\bin\rclone.exe` — the watchers prefer it automatically; deleting it falls back to the PATH rclone.
+
 ## Uninstall
 
 Scripted: `pwsh -File uninstall.ps1` stops both watcher processes and removes all four tasks; `-RemoveState` also deletes the state directory.
