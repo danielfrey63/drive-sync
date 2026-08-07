@@ -99,6 +99,7 @@ Defaults live in [`config.ps1`](config.ps1); machine-specific overrides go into 
 | `StateDir` | runtime state (logs, locks, cursors) | `%LOCALAPPDATA%\drive-sync` |
 | `MaxDeletes` | reactive delete cap per flush; larger storms go to the nightly bisync | `50` |
 | `PollSeconds` | Changes API poll interval | `60` |
+| `BisyncDailyAt` | daily start time of the reconciliation bisync (`HH:mm`) | `04:00` |
 | `PacerMinSleep` / `PacerBurst` | Drive pacer tuning (safe with an own client id) | `10ms` / `200` |
 
 Include/exclude rules live in [`filters.txt`](filters.txt) — changing them requires a one-time `sync-drive.ps1 -Resync`.

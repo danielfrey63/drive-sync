@@ -5,3 +5,4 @@ $DriveSyncConfig.LocalRoot = "C:\Users\me\GoogleDrive"
 $DriveSyncConfig.RemoteName = "gdrive"
 # $DriveSyncConfig.MaxDeletes = 50
 # $DriveSyncConfig.PollSeconds = 60
+# $DriveSyncConfig.BisyncDailyAt = "04:00"

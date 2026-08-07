@@ -19,6 +19,10 @@ $DriveSyncConfig = @{
     # Drive Changes API poll interval of the cloud watcher (seconds)
     PollSeconds   = 60
 
+    # daily start time of the reconciliation bisync ("HH:mm"); a full run
+    # lists both sides completely, so pick a quiet slot
+    BisyncDailyAt = "04:00"
+
     # Google Drive pacer tuning - safe with an OWN OAuth client id, too
     # aggressive for the shared default rclone client id
     PacerMinSleep = "10ms"

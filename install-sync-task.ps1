@@ -11,10 +11,12 @@
 
 param(
     [string]$TaskName = "DriveSync rclone bisync",
-    [string]$DailyAt = "04:00"
+    [string]$DailyAt = ""   # empty = BisyncDailyAt from config.ps1
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "config.ps1")
+if (-not $DailyAt) { $DailyAt = $DriveSyncConfig.BisyncDailyAt }
 $script = Join-Path $PSScriptRoot "sync-drive.ps1"
 $pwshExe = (Get-Command pwsh).Source
 
