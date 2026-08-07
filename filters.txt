@@ -42,6 +42,11 @@
 - *.glink
 - *.gmaps
 
+# Dead references in a foreign shared folder: the owner deleted the files,
+# the listing still shows them, every copy attempt gets a hard 404 and
+# aborts the resync (verified twice, 2026-08-07)
+- /Agile Lean Teal/Teal/Intro Presentations \[shared w／ providers\]/Slide Fonts/**
+
 # DriveFS remnants and Windows system junk
 - .tmp.driveupload/**
 - $RECYCLE.BIN/**
