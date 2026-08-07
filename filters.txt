@@ -10,6 +10,11 @@
 - .git/**
 - .idea/**
 
+# Secrets: environment files with live keys never go to the cloud
+- .env
+- .env.*
+- *.env
+
 # Package managers / language environments
 - node_modules/**
 - __pycache__/**
