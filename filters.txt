@@ -1,8 +1,14 @@
 # rclone filter rules for the "D:\Meine Ablage" <-> gdrive: bisync.
 # First matching rule wins; no leading slash = matches at any depth.
 # NOTE: changing this file requires a one-time "bisync --resync" afterwards.
-# Decisions (2026-08-03): build outputs excluded EVERYWHERE; .git stays synced
-# until the remaining repos have been relocated out of the Ablage.
+# Decisions (2026-08-07): the corpus may host git working trees; everything
+# reproducible (.git via remotes, package caches, build outputs) is excluded.
+# NOT excluded despite being dev dirs - name collisions with real content:
+# bin (1135x), obj (472x), vendor (36x). .vscode stays synced (tiny, useful).
+
+# Version control / IDE churn (reproducible via git remotes)
+- .git/**
+- .idea/**
 
 # Package managers / language environments
 - node_modules/**
@@ -11,6 +17,10 @@
 - venv/**
 - .tox/**
 - site-packages/**
+- .pytest_cache/**
+- .mypy_cache/**
+- .ruff_cache/**
+- .turbo/**
 
 # Build outputs
 - build/**

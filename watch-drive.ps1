@@ -86,7 +86,10 @@ Write-Log "started (PID $PID): $($rules.Dirs.Count) dir rules, $($rules.Exts.Cou
 # -Action blocks would not run reliably while the main loop sleeps.
 $fsw = [System.IO.FileSystemWatcher]::new($root)
 $fsw.IncludeSubdirectories = $true
-$fsw.InternalBufferSize = 65536
+# 1 MB (~5000 events): the kernel buffer sees ALL events below the root,
+# also excluded ones - dev-tool bursts (npm install, branch switches) would
+# overflow the 64 KB default long before our filters even run
+$fsw.InternalBufferSize = 1MB
 $fsw.NotifyFilter = [IO.NotifyFilters]::FileName -bor [IO.NotifyFilters]::DirectoryName -bor [IO.NotifyFilters]::LastWrite
 
 Register-ObjectEvent $fsw Created -SourceIdentifier fswCreated | Out-Null
