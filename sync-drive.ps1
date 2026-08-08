@@ -61,8 +61,11 @@ try {
         "--log-file", $logFile
         "--stats", "60s", "--stats-one-line"
     )
+    # --max-lock on every run: without it a killed bisync leaves a lock file
+    # that never expires and blocks all future runs until removed by hand
+    $rcArgs += @("--max-lock", "2h")
     if ($Resync) { $rcArgs += "--resync" }
-    else { $rcArgs += @("--resilient", "--recover", "--max-lock", "2h") }
+    else { $rcArgs += @("--resilient", "--recover") }
     if ($DryRun) { $rcArgs += "--dry-run" }
 
     $start = Get-Date
