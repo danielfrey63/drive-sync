@@ -10,6 +10,19 @@
 - .git/**
 - .idea/**
 
+# Legacy version control metadata (measured 2026-08-09: CVS 54'882 dirs /
+# 324k files, .svn 5'225 dirs / 65k files - pure churn, spot-checked as
+# genuine VCS metadata, no name collisions with real content)
+- .svn/**
+- CVS/**
+
+# Eclipse workspace state and generated API docs (measured 2026-08-09:
+# .metadata 76k files / 4.2 GiB, javadoc+apidocs 37k files; spot-checked
+# as workspace caches and javadoc output only)
+- .metadata/**
+- javadoc/**
+- apidocs/**
+
 # Secrets: environment files with live keys never go to the cloud
 - .env
 - .env.*
