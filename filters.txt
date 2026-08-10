@@ -72,3 +72,74 @@
 - desktop.ini
 - Thumbs.db
 - ~$*
+
+# Pristine public clones under Develop/github (measured 2026-08-10): repos
+# with NO uncommitted changes, NO unpushed commits and NO stashes are 1:1
+# reproducible from their remotes and stay out of the sync (64 repos,
+# ~51k files). Modified clones (e.g. odoo/odoo with unpushed commits,
+# liip/zebra with local edits) remain synced. To sync one of these again:
+# delete its line, then run sync-drive.ps1 -Resync once.
+- /Develop/github/anthropics/claude-code/**
+- /Develop/github/Archon/**
+- /Develop/github/awesome-copilot/**
+- /Develop/github/bitnami/bitnami-docker-odoo/**
+- /Develop/github/bizzycola/qrcode-generator/**
+- /Develop/github/browser-use/web-ui/**
+- /Develop/github/claude-code/**
+- /Develop/github/claude-code-source/**
+- /Develop/github/cpacker/MemGPT/**
+- /Develop/github/crawl4ai/**
+- /Develop/github/dart-mcp-server/**
+- /Develop/github/deepwiki-rs/**
+- /Develop/github/docling/**
+- /Develop/github/EnergyInfoSwiss-MobileApp/**
+- /Develop/github/everything-claude-code/**
+- /Develop/github/firecrawl/**
+- /Develop/github/freetree-matthias/spring-petclinic-tests/**
+- /Develop/github/g3/**
+- /Develop/github/gemini-ai-code-reviewer/**
+- /Develop/github/gemini-cli/**
+- /Develop/github/goose/**
+- /Develop/github/graphify/**
+- /Develop/github/hexstrike-ai/**
+- /Develop/github/huggingface_hub/**
+- /Develop/github/kilocode-fresh/**
+- /Develop/github/liip/drifter/**
+- /Develop/github/liip/LiipImagineBundle/**
+- /Develop/github/liip/LiipRokkaImagineBundle/**
+- /Develop/github/liip/RMT/**
+- /Develop/github/liip/styleguide/**
+- /Develop/github/liip/styleguide-starterkit/**
+- /Develop/github/liip/TheA11yMachine/**
+- /Develop/github/liip/wp-docker-setup/**
+- /Develop/github/liip/wrench/**
+- /Develop/github/llama.cpp/**
+- /Develop/github/lllyasviel/Fooocus/**
+- /Develop/github/markdownlint/**
+- /Develop/github/marvin/**
+- /Develop/github/mcp-atlassian-0.13.0/**
+- /Develop/github/mcp-launchpad/**
+- /Develop/github/mcp-observer-server/**
+- /Develop/github/mcp-server-asana/**
+- /Develop/github/mcp-server-youtube-transcript/**
+- /Develop/github/modelcontextprotocol/servers-archived/**
+- /Develop/github/n8n/**
+- /Develop/github/odoo/docker/**
+- /Develop/github/odoo/docker-official-images/**
+- /Develop/github/odoo/documentation-user/**
+- /Develop/github/odoo/enterprise/**
+- /Develop/github/oh-my-opencode/**
+- /Develop/github/omnigent/**
+- /Develop/github/open_deep_research/**
+- /Develop/github/open-notebook/**
+- /Develop/github/opencode/**
+- /Develop/github/Rob--W/cors-anywhere/**
+- /Develop/github/semanser/codel/**
+- /Develop/github/servers/**
+- /Develop/github/skillshare/**
+- /Develop/github/smolvlm-realtime-webcam/**
+- /Develop/github/sonnendach-ui/**
+- /Develop/github/trae-agent/**
+- /Develop/github/vllm/**
+- /Develop/github/weaviate/Verba/**
+- /Develop/github/WillowIT/Pentaho-reports-for-OpenERP/**
