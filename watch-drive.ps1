@@ -110,6 +110,13 @@ $renamedTotal = 0
 $deletedTotal = 0
 
 function Add-PendingPath([string]$abs, [string]$rel) {
+    if ([string]::IsNullOrWhiteSpace($rel)) {
+        # phantom event for the watch root itself (seen twice on 2026-08-12,
+        # rel = ""): enumerating it would enqueue the entire corpus (1.23M
+        # files) and poison the flush - the nightly bisync owns full passes
+        Write-Log "WARN ignoring event for watch root (would enqueue the whole corpus)"
+        return
+    }
     if (Test-Path -LiteralPath $abs -PathType Container) {
         # new/renamed directory: enqueue its files (move-in raises only one event)
         $added = 0
