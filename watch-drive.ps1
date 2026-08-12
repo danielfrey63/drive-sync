@@ -112,10 +112,14 @@ $deletedTotal = 0
 function Add-PendingPath([string]$abs, [string]$rel) {
     if (Test-Path -LiteralPath $abs -PathType Container) {
         # new/renamed directory: enqueue its files (move-in raises only one event)
+        $added = 0
         Get-ChildItem -LiteralPath $abs -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
             $r = $_.FullName.Substring($root.Length + 1)
-            if (-not (Test-Excluded $rules $r)) { [void]$pending.Add($r) }
+            if (-not (Test-Excluded $rules $r)) { if ($pending.Add($r)) { $added++ } }
         }
+        # always name the trigger dir for big fan-outs: a phantom event on a
+        # top-level dir once enqueued 1.2M files with no trace of the culprit
+        if ($added -gt 1000) { Write-Log "WARN dir event fanned out to $added file(s): $rel" }
     }
     elseif (Test-Path -LiteralPath $abs -PathType Leaf) { [void]$pending.Add($rel) }
 }
