@@ -187,10 +187,19 @@ try {
         $maxAge = [math]::Ceiling(($cuStart - $lastSeen).TotalSeconds) + 300
         $cuLog = Join-Path $stateDir "watcher-catchup.log"
         Remove-Item $cuLog -Force -Confirm:$false -ErrorAction SilentlyContinue
-        & $rcloneExe copy $root $remote --max-age "${maxAge}s" --filter-from $filters `
-            --no-traverse --update --modify-window 1s @pacer --transfers 4 `
-            --log-level INFO --log-file $cuLog 2>$null
-        $cuExit = $LASTEXITCODE
+        # below-normal priority (rclone inherits the class) and halved listing
+        # concurrency: the full corpus listing must never starve foreground
+        # work, only the catch-up may take longer
+        $self = Get-Process -Id $PID
+        $prevPriority = $self.PriorityClass
+        $self.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
+        try {
+            & $rcloneExe copy $root $remote --max-age "${maxAge}s" --filter-from $filters `
+                --no-traverse --update --modify-window 1s @pacer --transfers 4 --checkers 4 `
+                --log-level INFO --log-file $cuLog 2>$null
+            $cuExit = $LASTEXITCODE
+        }
+        finally { $self.PriorityClass = $prevPriority }
         $copied = @()
         if (Test-Path $cuLog) {
             $copied = @(Select-String -Path $cuLog -Pattern 'INFO\s+: (.+): Copied \(' |

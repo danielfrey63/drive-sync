@@ -33,6 +33,9 @@ $paused = Test-Path (Join-Path $stateDir "watchdog-pause")
 
 foreach ($t in $tasks) {
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    # delayed start: the catch-up's full corpus listing must not compete with
+    # the logon window (see WatcherLogonDelay in config.ps1)
+    $trigger.Delay = $DriveSyncConfig.WatcherLogonDelay
     # no time limit: if the scheduler's job object tracks the detached pwsh,
     # a limit would kill the long-running watcher. Battery flags matter: the
     # cmdlet defaults silently refuse to start and even STOP tasks on battery

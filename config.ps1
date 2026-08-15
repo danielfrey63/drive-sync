@@ -23,6 +23,13 @@ $DriveSyncConfig = @{
     # lists both sides completely, so pick a quiet slot
     BisyncDailyAt = "04:00"
 
+    # logon start delay of both watcher tasks (ISO 8601 duration). The start-up
+    # catch-up lists the full corpus (~2 min of metadata I/O); run concurrently
+    # with logon it starved App Readiness' packaged COM servers past their 120 s
+    # DCOM timeout and the shell waited ~3 min on that group (seen 2026-08-15).
+    # The catch-up covers the delayed window, so nothing is lost.
+    WatcherLogonDelay = "PT3M"
+
     # Google Drive pacer tuning - safe with an OWN OAuth client id, too
     # aggressive for the shared default rclone client id
     PacerMinSleep = "10ms"
