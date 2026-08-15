@@ -82,7 +82,13 @@ try {
     $newStatus = [ordered]@{ lastRun = $run }
     if ($exit -eq 0 -and -not $DryRun) { $newStatus.lastSuccess = $run }
     elseif ($status.lastSuccess) { $newStatus.lastSuccess = $status.lastSuccess }
-    ConvertTo-Json $newStatus -Depth 4 | Set-Content $statusFile
+    # retry: a concurrent reader (status check while the run ends) makes
+    # Set-Content throw and the whole run would end without a status record
+    $json = ConvertTo-Json $newStatus -Depth 4
+    foreach ($attempt in 1..5) {
+        try { Set-Content $statusFile $json -ErrorAction Stop; break }
+        catch { if ($attempt -eq 5) { Write-Warning "status.json not written: $_" } else { Start-Sleep -Milliseconds 200 } }
+    }
 
     # log rotation: keep the newest 30
     Get-ChildItem $logDir -Filter "bisync-*.log" | Sort-Object Name -Descending |
