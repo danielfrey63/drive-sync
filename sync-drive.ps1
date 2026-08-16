@@ -9,6 +9,9 @@
 # - Flag set battle-tested during the 2026-08-04 baseline: dangling shortcuts
 #   skipped, gdocs stay cloud-only, 1s modtime window (Drive ms vs NTFS 100ns),
 #   tuned pacer for the own client id.
+# - Every EmptyDirCleanupDays a successful run also prunes empty folder
+#   skeletons on the remote (rclone rmdirs) - bisync itself only tracks files
+#   and never sees directories without any.
 #
 # Usage:
 #   pwsh -File sync-drive.ps1              # normal bisync run
@@ -88,6 +91,31 @@ try {
     foreach ($attempt in 1..5) {
         try { Set-Content $statusFile $json -ErrorAction Stop; break }
         catch { if ($attempt -eq 5) { Write-Warning "status.json not written: $_" } else { Start-Sleep -Milliseconds 200 } }
+    }
+
+    # --- periodic empty-dir cleanup on the remote --------------------------
+    # rmdirs only ever deletes empty directories; a folder holding just an
+    # unexportable google doc looks empty in listings but the Drive API
+    # refuses to remove it, so a non-zero exit here is expected and non-fatal.
+    $cleanupDays = $DriveSyncConfig.EmptyDirCleanupDays
+    if ($exit -eq 0 -and -not $DryRun -and -not $Resync -and $cleanupDays -gt 0) {
+        $stampFile = Join-Path $stateDir "rmdirs-last.txt"
+        $lastCleanup = [datetime]::MinValue
+        if (Test-Path $stampFile) {
+            try { $lastCleanup = [datetime](Get-Content $stampFile -TotalCount 1) } catch {}
+        }
+        if (((Get-Date) - $lastCleanup).TotalDays -ge $cleanupDays) {
+            Write-Host "Empty-dir cleanup due - running rclone rmdirs (log: $logFile)"
+            $rmArgs = @("rmdirs", $remote, "--leave-root", "--fast-list") +
+                $DriveSyncConfig.Pacer +
+                @("--log-level", "INFO", "--log-file", $logFile)
+            foreach ($ex in $DriveSyncConfig.EmptyDirCleanupExcludes) { $rmArgs += @("--exclude", $ex) }
+            & rclone @rmArgs
+            if ($LASTEXITCODE -ne 0) { Write-Warning "rmdirs exit $LASTEXITCODE (expected when a folder holds only unexportable gdocs) - see $logFile" }
+            # stamp regardless of the exit code: the leftovers above would
+            # otherwise retrigger the full-tree listing every night
+            Set-Content $stampFile (Get-Date -Format "s")
+        }
     }
 
     # log rotation: keep the newest 30

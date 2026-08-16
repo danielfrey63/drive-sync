@@ -57,7 +57,7 @@ Three tiers, each covering the blind spots of the one above:
 
 1. **Upload watcher** (`watch-drive.ps1`): a `FileSystemWatcher` batches local events (debounce 15 s / 60 s), uploads via `rclone copy --files-from --no-traverse` (no tree listing), turns renames into server-side `rclone moveto` and verified deletes into Drive-trash moves. On start, a catch-up (`rclone copy --max-age` since the last liveness stamp) closes any coverage gap.
 2. **Cloud watcher** (`watch-cloud.ps1`): polls the Drive Changes API with a persisted page token (cheap delta calls, no listing), downloads changed files and moves cloud-trashed files to the recycle bin. A ledger of recent own uploads suppresses echo downloads.
-3. **Nightly bisync** (`sync-drive.ps1`, default 04:00): full `rclone bisync` as the guarantee layer — conflicts, cloud-side folder renames, anything missed. Watchers defer their flushes while it runs.
+3. **Nightly bisync** (`sync-drive.ps1`, default 04:00): full `rclone bisync` as the guarantee layer — conflicts, cloud-side folder renames, anything missed. Watchers defer their flushes while it runs. Every `EmptyDirCleanupDays` a successful run also prunes empty folder skeletons on the remote (`rclone rmdirs` — bisync only tracks files and never sees directories without any).
 
 ### Known limitations
 
@@ -100,6 +100,8 @@ Defaults live in [`config.ps1`](config.ps1); machine-specific overrides go into 
 | `MaxDeletes` | reactive delete cap per flush; larger storms go to the nightly bisync | `50` |
 | `PollSeconds` | Changes API poll interval | `60` |
 | `BisyncDailyAt` | daily start time of the reconciliation bisync (`HH:mm`) | `04:00` |
+| `EmptyDirCleanupDays` | days between remote empty-dir cleanups (`rclone rmdirs` after a successful bisync); `0` disables | `30` |
+| `EmptyDirCleanupExcludes` | paths the cleanup skips (folders whose only content is an unexportable google-native file would look empty) | `/Google Earth/**` |
 | `PacerMinSleep` / `PacerBurst` | Drive pacer tuning (safe with an own client id) | `10ms` / `200` |
 
 Include/exclude rules live in [`filters.txt`](filters.txt) — changing them requires a one-time `sync-drive.ps1 -Resync`.
@@ -120,6 +122,7 @@ Include/exclude rules live in [`filters.txt`](filters.txt) — changing them req
 | `watcher-status.json`, `cloud-watcher-status.json` | counters for `sync-status.ps1` |
 | `cloud-watcher-pagetoken.txt` | persisted Changes API cursor; deleting it restarts from "now" (the gap is closed by the next bisync) |
 | `upload-ledger.txt` | echo control: own uploads of the last 30 min |
+| `rmdirs-last.txt` | timestamp of the last remote empty-dir cleanup |
 | `watcher-lastseen.txt`, `watcher-catchup.log` | liveness stamp of the upload watcher ("everything up to here is uploaded or captured" — only advances while nothing is pending) and the log of the last start-up catch-up |
 | `watchdog.log`, `watchdog-pause` | watchdog log; the pause marker suppresses restarts during maintenance (auto-discarded after 6 h; a first line `pid:<n>` keeps it alive as long as that process runs) |
 | `bin\rclone.exe` | optional custom rclone build; the watchers prefer it, deleting it falls back to the PATH rclone |

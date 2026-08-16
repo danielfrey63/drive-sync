@@ -23,6 +23,18 @@ $DriveSyncConfig = @{
     # lists both sides completely, so pick a quiet slot
     BisyncDailyAt = "04:00"
 
+    # days between remote empty-dir cleanups (rclone rmdirs after a successful
+    # nightly bisync). bisync only tracks files, so trees whose files were
+    # deleted or filtered out leave folder skeletons behind on the cloud
+    # (15'634 removed on the first cleanup, 2026-08-16). 0 disables.
+    EmptyDirCleanupDays = 30
+
+    # paths the cleanup must not touch: folders whose only content is an
+    # unexportable google-native file (e.g. Earth projects, Forms) are
+    # invisible in listings and would look empty. The Drive API refuses to
+    # delete them anyway, but excluding known cases avoids noisy errors.
+    EmptyDirCleanupExcludes = @("/Google Earth/**")
+
     # logon start delay of both watcher tasks (ISO 8601 duration). The start-up
     # catch-up lists the full corpus (~2 min of metadata I/O); run concurrently
     # with logon it starved App Readiness' packaged COM servers past their 120 s
