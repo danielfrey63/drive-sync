@@ -10,6 +10,10 @@
 - .git/**
 - .idea/**
 
+# Claude Code per-project runtime state (locks, caches, session artifacts);
+# volatile files caused bisync conflict copies (2026-08-16)
+- .claude/**
+
 # Legacy version control metadata (measured 2026-08-09: CVS 54'882 dirs /
 # 324k files, .svn 5'225 dirs / 65k files - pure churn, spot-checked as
 # genuine VCS metadata, no name collisions with real content)
