@@ -32,6 +32,13 @@
 - .env.*
 - *.env
 
+# Machine-local caches and append-churn logs (conflict wave 2026-08-25/26:
+# regenerable caches and high-frequency logs diverge whenever a bisync runs
+# against an unflushed watcher backlog; none of them need a cloud copy)
+- .abacus-profile/**
+- .fallow/**
+- .distill.log
+
 # Package managers / language environments
 - node_modules/**
 - __pycache__/**

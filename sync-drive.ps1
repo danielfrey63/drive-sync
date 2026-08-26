@@ -56,6 +56,12 @@ try {
         "--drive-skip-dangling-shortcuts"
         "--modify-window", "1s"
         "--fast-list"
+        # keep the newer version under the ORIGINAL name on a two-sided change;
+        # only the loser gets a .conflictN suffix. The default (none) renamed
+        # BOTH copies, so the original path vanished from every consumer (git
+        # status noise, broken references) - seen 2026-08-26 after a missed
+        # nightly plus an unflushed watcher backlog diverged 8 files.
+        "--conflict-resolve", "newer"
     ) + $DriveSyncConfig.Pacer + @(
         "--checkers", "16"
         "--transfers", "8"
