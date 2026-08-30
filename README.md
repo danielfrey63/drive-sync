@@ -177,7 +177,7 @@ Uninstalling never touches your data: the local mirror and the cloud content sta
 
 ## Off-site backup (restic)
 
-The sync is a mirror, not a backup: a deletion or an encrypting malware propagates to the cloud within seconds. `backup/` adds an independent, versioned, client-side encrypted copy of `C:` (user data, no OS/program files) and `D:\Meine Ablage` to a Hetzner Storage Box via [restic](https://restic.net) over SFTP.
+Full setup, restore and troubleshooting notes live in [backup/README.md](backup/README.md). The sync is a mirror, not a backup: a deletion or an encrypting malware propagates to the cloud within seconds. `backup/` adds an independent, versioned, client-side encrypted copy of `C:` (user data, no OS/program files) and `D:\Meine Ablage` to a Hetzner Storage Box via [restic](https://restic.net) over SFTP.
 
 - **Transport**: SSH port 23 of the box (OpenSSH), never port 22 (ProFTPD `mod_sftp`, no post-quantum key exchange). The `storagebox` alias in `~/.ssh/config` pins `KexAlgorithms sntrup761x25519-sha512@openssh.com`, so a downgrade to a classical exchange fails instead of silently connecting. restic is pointed at the Microsoft OpenSSH build under `scoop\apps\openssh` (`sftp.command`), because the MSYS `ssh` in `PATH` cannot reach the Windows `ssh-agent` that holds the passphrase-protected key.
 - **Encryption at rest**: restic (AES-256, key derived from the repository password in `%LOCALAPPDATA%\restic\storagebox-password.txt`). Losing that password loses the backup — keep a copy in the password manager.
