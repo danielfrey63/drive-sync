@@ -118,13 +118,15 @@ $o = "sftp.command=C:/Users/<you>/scoop/apps/openssh/current/ssh.exe storagebox 
 | what changed between two | `restic diff <id1> <id2> -o $o` |
 | browse a snapshot | `restic ls latest -o $o "/D/Meine Ablage/Develop"` |
 | restore one folder | `restic restore latest -o $o --target "D:\restore" --include "/D/Meine Ablage/Develop/danielfrey63/drive-sync"` |
-| restore a file as it was last Tuesday | `restic restore latest --time "2026-08-25 12:00" -o $o --target "D:\restore" --include "/C/Users/<you>/Documents/x.docx"` |
+| restore a file as it was last Tuesday | pick the snapshot id from `restic snapshots -o $o --compact`, then `restic restore <id> -o $o --target "D:\restore" --include "/C/Users/<you>/Documents/x.docx"` |
 | find a file across snapshots | `restic find -o $o "*.kdbx"` |
 | space used / dedup ratio | `restic stats -o $o --mode raw-data` |
 | manual run now | `.\run-backup.ps1` (elevated for VSS) |
 | tail the log | `Get-Content "$env:LOCALAPPDATA\drive-sync\logs\backup-$(Get-Date -Format yyyyMMdd).log" -Tail 20` |
 
-Paths inside the repository are written `/C/Users/...` and `/D/Meine Ablage/...` — drive letters become the first path component, backslashes become slashes. Restoring a full snapshot recreates that layout under `--target` (`D:\restore\C\Users\...`); the one harmless error you will see is a failed timestamp on the read-only `Users` directory.
+Paths inside the repository are written `/C/Users/...` and `/D/Meine Ablage/...` — drive letters become the first path component, backslashes become slashes. Restoring a full snapshot recreates that layout under `--target` (`D:\restore\C\Users\...`); the one harmless error you will see is a failed timestamp on the read-only `Users` directory. `restic mount` does not exist on Windows (no FUSE) — use `ls`, `find`, `dump` and `restore --include` instead.
+
+Step-by-step recovery scenarios — lost file, dead disk, new machine, ransomware — are in [RESTORE.md](RESTORE.md).
 
 ## Decisions
 
