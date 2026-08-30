@@ -185,7 +185,9 @@ The upload watcher pushes local changes to the cloud within a minute, so by the 
 
 **A. Cut the machine off — first, before anything else.** Pull the network cable, switch Wi-Fi off, or pull the plug. Do not log in "to have a look", do not reboot into it, do not connect any external disk to it. Every minute online is another batch of files encrypted and synced up.
 
-**B. From another device (phone is fine), freeze the repository.** Hetzner Console → the Storage Box → **Snapshots → Create snapshot.** A Storage Box snapshot is taken server-side and cannot be deleted over SSH; whatever the attacker does to `/home/restic` from now on, this copy stands. Give it a name with the date. Do this even if you are not sure it is ransomware — a snapshot costs nothing and can be deleted later.
+**B. From another device (phone is fine), freeze the repository.** Hetzner Console → the Storage Box → **Snapshots → Create snapshot.** A Storage Box snapshot is taken server-side and is read-only over SSH (`.zfs/snapshot`); the key and the restic password on the infected machine cannot touch it. Give it a name with the date. Do this even if you are not sure it is ransomware — a snapshot costs nothing and can be deleted later.
+
+What *can* delete a snapshot is the Hetzner **account**: the Console and the API. If the infected machine had a logged-in Console tab, a saved Hetzner password, an unlocked password manager or an API token on disk, assume the attacker has that too — change the Hetzner password and revoke API tokens from the other device **before** anything else in this step, then create the snapshot. The defence for this is hygiene, set up in advance: 2FA on the Hetzner account, no persistent Console login on the backup machine, no API token stored there, password manager locked when you are not in front of it. Truly immutable storage (a retention lock that not even the account owner can lift) exists only as S3 Object Lock in compliance mode at other providers — a possible second target, not a replacement.
 
 **C. Lock the attacker out of the box.** Still in the Console: **Reset password** (note the new one), and **disable SSH-Support** for now — that closes port 23 for the compromised key, which you cannot revoke from the Console. Also **disable External reachability** if you like; you will re-enable both from the clean machine.
 
@@ -257,4 +259,5 @@ Once a year, do scenario 4 for real on a spare machine or a VM: the secrets from
 Two things this runbook relies on that are **not** in place yet:
 
 1. **Automatic Storage Box snapshots** — Console → Storage Box → Snapshots → *Automatic snapshots*: daily, keep 7. This is the ransomware step B without having to be fast. A snapshot holds the delta since the previous one; restic mostly appends, so daily deltas are small except on Sundays when `prune` rewrites packs. The BX21 has 20 automatic slots; they count against the 5 TB.
-2. **The three secrets in the password manager**, verified by actually opening the entry on a device that is not this machine.
+2. **Hetzner account hygiene** — snapshots are only as safe as the account that can delete them: 2FA enabled, no Console session kept open on this machine, no API token stored on it.
+3. **The three secrets in the password manager**, verified by actually opening the entry on a device that is not this machine.
