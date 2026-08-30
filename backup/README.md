@@ -28,6 +28,7 @@ C:\  +  D:\Meine Ablage
 | `backup-config.ps1` | repository, password file, retention, schedule, pinned ssh command. Machine-specific overrides go into `backup-config.local.ps1` (gitignored) |
 | `restic-excludes.txt` | what stays out (see *Decisions*) |
 | `install-backup-task.ps1` | registers the elevated scheduled task (idempotent) |
+| `backup-status.ps1` | task/process/log status plus repository size and upload rate measured on the box (restic logs no progress when not on a terminal) |
 
 Logs: `%LOCALAPPDATA%\drive-sync\logs\backup-<yyyyMMdd>.log`. restic cache: `%LOCALAPPDATA%\drive-sync\restic-cache`.
 
