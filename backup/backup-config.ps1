@@ -16,13 +16,17 @@ $BackupConfig = @{
     Sources      = @("C:\", "D:\Meine Ablage")
     ExcludeFile  = Join-Path $PSScriptRoot "restic-excludes.txt"
 
-    KeepDaily    = 7
-    KeepWeekly   = 4
+    # Snapshots are cheap (a tree of pointers into deduplicated chunks, only
+    # changed data is uploaded), so run often and thin out later: every
+    # intermediate state for a week, one per day for a month, then monthly.
+    KeepWithin   = "7d"
+    KeepDaily    = 30
     KeepMonthly  = 12
     MaintenanceDay = [DayOfWeek]::Sunday   # prune + check run on this weekday
     CheckSubset  = "2%"                    # share of pack data read back per check
 
-    DailyAt      = "05:00"                 # after the 04:00 bisync
+    FirstRunAt   = "05:00"                 # after the 04:00 bisync
+    IntervalHours = 6                      # 05:00, 11:00, 17:00, 23:00
 }
 
 $__localBackupConfig = Join-Path $PSScriptRoot "backup-config.local.ps1"

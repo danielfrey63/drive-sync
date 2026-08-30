@@ -61,24 +61,41 @@ try {
     $args = @("backup") + $cfg.Sources + @(
         "--exclude-file", $cfg.ExcludeFile
         "--exclude-caches"
-        "--tag", "daily"
+        "--tag", "auto"
         "--compression", "auto"
     )
     if ($useVss) { $args += "--use-fs-snapshot" }
     if ($DryRun) { $args += "--dry-run"; $args += "--verbose" }
 
     Log "backup start (vss=$useVss dryrun=$DryRun) -> $($cfg.Repository)"
-    & $cfg.Restic @args @common 2>&1 | Tee-Object -FilePath $log -Append | Out-Host
+    $out = & $cfg.Restic @args @common 2>&1 | Tee-Object -FilePath $log -Append
     $rc = $LASTEXITCODE
+    $out | Select-Object -Last 8 | Out-Host
+
+    # per-file errors flood the log (34k iCloud placeholders on the first
+    # dry-run); summarise them by cause so the tail of the log is readable
+    $errors = @($out | Where-Object { "$_" -match '^(error|scan):' } | ForEach-Object {
+        switch -Regex ("$_") {
+            'Clouddateianbieter|cloud file provider' { 'cloud placeholder (dehydrated file)' }
+            'Zugriff verweigert|Access is denied'     { 'access denied (run elevated)' }
+            'anderen Prozess|being used by another'   { 'locked file (VSS missing or skipped)' }
+            'Virus|nicht erfolgreich abgeschlossen'   { 'blocked by Defender' }
+            default                                   { 'other' }
+        }
+    })
+    if ($errors.Count -gt 0) {
+        Log "backup error summary ($($errors.Count) files):"
+        $errors | Group-Object | Sort-Object Count -Descending | ForEach-Object { Log ("  {0,6}  {1}" -f $_.Count, $_.Name) }
+    }
     # 3 = some source files could not be read; the snapshot is still complete for the rest
-    if ($rc -eq 3) { Log "backup finished with unreadable files (rc=3), see log" }
+    if ($rc -eq 3) { Log "backup finished with unreadable files (rc=3)" }
     elseif ($rc -ne 0) { Log "backup FAILED rc=$rc"; exit $rc }
     else { Log "backup done" }
 
     if ($DryRun -or $SkipMaintenance) { exit 0 }
 
-    Log "forget: keep $($cfg.KeepDaily)d/$($cfg.KeepWeekly)w/$($cfg.KeepMonthly)m"
-    & $cfg.Restic forget --keep-daily $cfg.KeepDaily --keep-weekly $cfg.KeepWeekly `
+    Log "forget: keep all within $($cfg.KeepWithin), then $($cfg.KeepDaily) daily / $($cfg.KeepMonthly) monthly"
+    & $cfg.Restic forget --keep-within $cfg.KeepWithin --keep-daily $cfg.KeepDaily `
         --keep-monthly $cfg.KeepMonthly --group-by host @common 2>&1 | Tee-Object -FilePath $log -Append | Out-Host
     if ($LASTEXITCODE -ne 0) { Log "forget FAILED rc=$LASTEXITCODE"; exit $LASTEXITCODE }
 
