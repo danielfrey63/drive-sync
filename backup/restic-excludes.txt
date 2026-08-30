@@ -1,0 +1,121 @@
+# restic exclude patterns for run-backup.ps1 (--exclude-file).
+# Matching is per path component; "*" does not cross a separator, "**" does.
+# Decisions (2026-08-30): C: without OS/programs (restic cannot produce a
+# bootable image; reinstall + restore is the recovery path), .git stays in
+# (unpushed commits are the value), package/build caches stay out.
+# Sizes measured 2026-08-30 with du64.
+
+# --- C: system, OS, installed programs (reinstallable) ---
+C:\Windows
+C:\Program Files
+C:\Program Files (x86)
+C:\ProgramData\NVIDIA
+C:\ProgramData\NVIDIA Corporation
+C:\ProgramData\Microsoft\Windows Defender
+C:\ProgramData\Package Cache
+C:\pagefile.sys
+C:\swapfile.sys
+C:\hiberfil.sys
+C:\DumpStack.log
+C:\DumpStack.log.tmp
+C:\$$WinREAgent
+C:\Config.Msi
+C:\Recovery
+C:\OneDriveTemp
+C:\WPR
+C:\Intel
+C:\drivers
+C:\Dokumente und Einstellungen
+
+# --- Windows housekeeping on every volume ---
+$$RECYCLE.BIN
+$$Recycle.Bin
+System Volume Information
+desktop.ini
+Thumbs.db
+~$$*
+
+# --- user profile: reinstallable tooling and caches (measured 2026-08-30) ---
+# 101 GB, reinstallable via scoop; scoop\persist stays
+C:\Users\*\scoop\apps
+# 33 GB installer downloads
+C:\Users\*\scoop\cache
+C:\Users\*\scoop\shims
+# 33 GB WSL vhdx, locked and volatile
+C:\Users\*\AppData\Local\Docker
+C:\Users\*\AppData\Local\Programs
+C:\Users\*\AppData\Local\Temp
+C:\Users\*\AppData\Local\pip
+C:\Users\*\AppData\Local\uv
+C:\Users\*\AppData\Local\npm-cache
+C:\Users\*\AppData\Local\ms-playwright
+C:\Users\*\AppData\Local\JetBrains
+C:\Users\*\AppData\Local\Microsoft\WindowsApps
+C:\Users\*\AppData\Local\Microsoft\Windows\INetCache
+C:\Users\*\AppData\Local\Microsoft\Windows\WER
+C:\Users\*\AppData\Local\Microsoft\Windows\Explorer
+C:\Users\*\AppData\Local\Microsoft\Edge\User Data\*\Cache
+C:\Users\*\AppData\Local\Microsoft\Edge\User Data\*\Code Cache
+C:\Users\*\AppData\Local\Microsoft\Edge\User Data\*\GPUCache
+C:\Users\*\AppData\Local\Google\Chrome\User Data\*\Cache
+C:\Users\*\AppData\Local\Google\Chrome\User Data\*\Code Cache
+C:\Users\*\AppData\Local\Google\Chrome\User Data\*\GPUCache
+C:\Users\*\AppData\Local\Google\Chrome\User Data\*\Service Worker\CacheStorage
+C:\Users\*\AppData\Local\Google\DriveFS
+# 8 GB WSL ext4.vhdx, locked
+C:\Users\*\AppData\Local\Packages\CanonicalGroupLimited*
+C:\Users\*\AppData\Local\Packages\*\LocalCache
+C:\Users\*\AppData\Local\Packages\*\TempState
+C:\Users\*\AppData\Local\Packages\*\AC
+C:\Users\*\AppData\Local\CrashDumps
+C:\Users\*\AppData\Local\D3DSCache
+C:\Users\*\AppData\Local\NVIDIA
+C:\Users\*\AppData\Local\drive-sync\restic-cache
+C:\Users\*\AppData\Roaming\Code\Cache
+C:\Users\*\AppData\Roaming\Code\CachedData
+C:\Users\*\AppData\Roaming\Code\CachedExtensionVSIXs
+C:\Users\*\.cache
+C:\Users\*\.codeium
+C:\Users\*\.continue
+C:\Users\*\.windsurf
+C:\Users\*\.nexe
+C:\Users\*\.docker
+C:\Users\*\.vscode\extensions
+C:\Users\*\go\pkg
+C:\Users\*\.cargo\registry
+C:\Users\*\.m2\repository
+C:\Users\*\.gradle
+C:\Users\*\.nuget\packages
+# iCloud placeholders: 34'075 dehydrated files, provider not running (dry-run 2026-08-30);
+# the content lives at Apple only and cannot be read here
+C:\Users\*\Pictures\iCloud Photos
+C:\Users\*\iCloudDrive
+C:\Users\*\.codex\tmp
+C:\Users\*\ntuser.dat*
+C:\Users\*\NTUSER.DAT*
+C:\Users\*\AppData\Local\Microsoft\Windows\UsrClass.dat*
+
+# --- dev churn inside any tree (mirrors filters.txt, minus .git/.claude/.env) ---
+node_modules
+__pycache__
+.venv
+venv
+.tox
+site-packages
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.turbo
+.gradle
+.next
+.cache
+.metadata
+CVS
+.svn
+.tmp.driveupload
+
+# --- build outputs: only under Develop, the names collide elsewhere ---
+D:\Meine Ablage\Develop\**\build
+D:\Meine Ablage\Develop\**\target
+D:\Meine Ablage\Develop\**\dist
+D:\Meine Ablage\Develop\**\out

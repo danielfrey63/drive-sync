@@ -5,3 +5,4 @@ config.local.ps1
 # local artefacts
 *.log
 filters.txt.md5
+backup/backup-config.local.ps1

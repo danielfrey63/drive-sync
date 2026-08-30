@@ -175,6 +175,23 @@ Uninstalling never touches your data: the local mirror and the cloud content sta
 
 </details>
 
+## Off-site backup (restic)
+
+The sync is a mirror, not a backup: a deletion or an encrypting malware propagates to the cloud within seconds. `backup/` adds an independent, versioned, client-side encrypted copy of `C:` (user data, no OS/program files) and `D:\Meine Ablage` to a Hetzner Storage Box via [restic](https://restic.net) over SFTP.
+
+- **Transport**: SSH port 23 of the box (OpenSSH), never port 22 (ProFTPD `mod_sftp`, no post-quantum key exchange). The `storagebox` alias in `~/.ssh/config` pins `KexAlgorithms sntrup761x25519-sha512@openssh.com`, so a downgrade to a classical exchange fails instead of silently connecting. restic is pointed at the Microsoft OpenSSH build under `scoop\apps\openssh` (`sftp.command`), because the MSYS `ssh` in `PATH` cannot reach the Windows `ssh-agent` that holds the passphrase-protected key.
+- **Encryption at rest**: restic (AES-256, key derived from the repository password in `%LOCALAPPDATA%\restic\storagebox-password.txt`). Losing that password loses the backup — keep a copy in the password manager.
+- **Schedule**: daily at 05:00 after the bisync, elevated for VSS snapshots of locked files; retention 7 daily / 4 weekly / 12 monthly; `prune` and a 2 % `check --read-data-subset` on Sundays.
+- **Excludes**: `backup/restic-excludes.txt` — OS, installed programs, package/build caches, WSL/Docker disk images; `.git`, `.claude` and `.env` stay in, unlike the sync filters.
+
+```powershell
+# one-time: key in the Windows ssh-agent, repository initialised (see backup/backup-config.ps1)
+.\backup\run-backup.ps1 -DryRun            # scan only, shows what would be added
+.\backup\run-backup.ps1                    # manual run (VSS only when elevated)
+.\backup\install-backup-task.ps1           # from an elevated console: registers the daily task
+restic snapshots -o "sftp.command=C:/Users/<you>/scoop/apps/openssh/current/ssh.exe storagebox -s sftp"
+```
+
 ## Relation to rclone upstream
 
 Everything here rides on [rclone](https://github.com/rclone/rclone) (`bisync`, `copy`, `moveto`, the Drive backend). Building this produced three upstream contributions, currently in flight:
@@ -206,6 +223,8 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 | `uninstall.ps1` | stops the watchers and removes all four tasks (`-RemoveState` also deletes the state dir) |
 | `sync-status.ps1` | status overview (last bisync, watcher liveness and counters) |
 | `howto-google-oauth.md` | how to create your own Google OAuth client id |
+| `backup/run-backup.ps1`, `backup/backup-config.ps1`, `backup/restic-excludes.txt` | restic off-site backup to the Hetzner Storage Box (backup → forget → prune/check) |
+| `backup/install-backup-task.ps1` | registers the daily elevated backup task (idempotent) |
 
 ## License
 
