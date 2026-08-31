@@ -67,9 +67,19 @@ try {
     if ($useVss) { $args += "--use-fs-snapshot" }
     if ($DryRun) { $args += "--dry-run"; $args += "--verbose" }
 
+    # crashes of earlier runs leave stale locks behind; plain unlock removes
+    # only those, never the lock of a live process
+    & $cfg.Restic unlock @common 2>&1 | Tee-Object -FilePath $log -Append | Out-Null
+
     Log "backup start (vss=$useVss dryrun=$DryRun) -> $($cfg.Repository)"
-    $out = & $cfg.Restic @args @common 2>&1 | Tee-Object -FilePath $log -Append
-    $rc = $LASTEXITCODE
+    for ($attempt = 1; $attempt -le $cfg.BackupRetries; $attempt++) {
+        $out = & $cfg.Restic @args @common 2>&1 | Tee-Object -FilePath $log -Append
+        $rc = $LASTEXITCODE
+        if ($rc -in 0, 3) { break }
+        Log "backup attempt $attempt/$($cfg.BackupRetries) failed rc=$rc, retrying in $($cfg.RetryWaitSec)s"
+        Start-Sleep -Seconds $cfg.RetryWaitSec
+        & $cfg.Restic unlock @common 2>&1 | Out-Null
+    }
     $out | Select-Object -Last 8 | Out-Host
 
     # per-file errors flood the log (34k iCloud placeholders on the first

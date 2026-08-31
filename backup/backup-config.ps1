@@ -22,6 +22,13 @@ $BackupConfig = @{
     KeepWithin   = "7d"
     KeepDaily    = 30
     KeepMonthly  = 12
+    # The sftp backend runs a single ssh; when the connection dies, the whole
+    # run aborts (seen twice on 31.08.2026: Intel Wi-Fi driver resets after
+    # hours of sustained upload). A retry resumes from the repository index,
+    # so re-uploaded work is near zero.
+    BackupRetries = 5
+    RetryWaitSec  = 60
+
     MaintenanceDay = [DayOfWeek]::Sunday   # prune + check run on this weekday
     CheckSubset  = "2%"                    # share of pack data read back per check
 
