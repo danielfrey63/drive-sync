@@ -66,6 +66,22 @@ function Write-Log([string]$msg) {
     catch {}
 }
 
+# Diagnostic event trace: every raw FSW event with source and path, BEFORE
+# any filtering. Added to explain why dir renames/deletes during the
+# 2026-08-28 restructuring never reached the queues ("0 ren / 0 del pending"
+# all night). Cheap (one Add-Content per drain cycle), capped at 2x10MB.
+$eventLogFile = Join-Path $stateDir "watcher-events.log"
+function Write-EventLog([string[]]$lines) {
+    try {
+        if ((Test-Path $eventLogFile) -and (Get-Item $eventLogFile).Length -gt 10MB) {
+            Move-Item $eventLogFile "$eventLogFile.1" -Force -ErrorAction SilentlyContinue
+        }
+        $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        Add-Content $eventLogFile @($lines | ForEach-Object { "$ts $_" }) -ErrorAction SilentlyContinue
+    }
+    catch {}
+}
+
 # --- single instance --------------------------------------------------------
 if (Test-Path $lockFile) {
     $other = Get-Content $lockFile -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -144,7 +160,10 @@ $ledgerFile = Join-Path $stateDir "upload-ledger.txt"
 function Add-LedgerEntries([string[]]$rels) {
     try {
         $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-        $cut = $now - 1800
+        # retention must cover the Drive changes-API latency (a 486 MB upload
+        # surfaced its change event 23 min late on 2026-08-28); keep in sync
+        # with the reader window in watch-cloud.ps1
+        $cut = $now - 3600
         $keep = @()
         if (Test-Path $ledgerFile) {
             $keep = @(Get-Content $ledgerFile -ErrorAction SilentlyContinue |
@@ -231,16 +250,19 @@ try {
             Update-LastSeen
         }
         $drained = 0
+        $evtTrace = [System.Collections.Generic.List[string]]::new()
         foreach ($evt in @(Get-Event)) {
             $drained++
             $src = $evt.SourceIdentifier
             $ea = $evt.SourceEventArgs
             Remove-Event -EventIdentifier $evt.EventIdentifier -ErrorAction SilentlyContinue
             $lastEvent = Get-Date
-            if ($src -eq "fswError") { Write-Log "WARN event buffer overflow - nightly bisync will reconcile"; continue }
+            if ($src -eq "fswError") { Write-Log "WARN event buffer overflow - nightly bisync will reconcile"; $evtTrace.Add("fswError OVERFLOW"); continue }
             $path = $ea.FullPath
             if (-not $path.StartsWith($root)) { continue }
             $rel = $path.Substring($root.Length + 1)
+            if ($src -eq "fswRenamed") { $evtTrace.Add("$src $($ea.OldFullPath.Substring($root.Length + 1)) -> $rel") }
+            else { $evtTrace.Add("$src $rel") }
 
             if ($src -eq "fswDeleted") {
                 if (-not (Test-Excluded $rules $rel)) { [void]$deletes.Add($rel) }
@@ -266,6 +288,7 @@ try {
             }
             if ($null -eq $oldestPending) { $oldestPending = Get-Date }
         }
+        if ($evtTrace.Count -gt 0) { Write-EventLog $evtTrace }
         if ($drained -gt 0) { Write-Log "events: $drained drained, $($pending.Count) up / $($renames.Count) ren / $($deletes.Count) del pending" }
 
         if (($pending.Count + $renames.Count + $deletes.Count) -eq 0) { $oldestPending = $null; continue }
@@ -288,6 +311,27 @@ try {
                 if (-not (Test-Path -LiteralPath $newAbs)) { continue }   # gone again; delete/bisync covers it
                 $oldR = $rn.Old -replace '\\', '/'
                 $newR = $rn.New -replace '\\', '/'
+                if ($oldR -ne $newR -and $oldR -ieq $newR) {
+                    # case-only rename: Drive's case-insensitive path lookup
+                    # resolves source and destination to the same object, the
+                    # direct moveto fails and the fallback would re-upload the
+                    # whole tree (340 MB on 2026-08-28) - go via a temp name
+                    $tmpR = "$newR.casemv-tmp"
+                    & $rcloneExe moveto "$remote$oldR" "$remote$tmpR" @pacer --log-level ERROR --log-file $logFile 2>$null
+                    if ($LASTEXITCODE -eq 0) {
+                        & $rcloneExe moveto "$remote$tmpR" "$remote$newR" @pacer --log-level ERROR --log-file $logFile 2>$null
+                        if ($LASTEXITCODE -eq 0) {
+                            $renamedTotal++
+                            Write-Log "rename (case-only, 2-step): $oldR -> $newR"
+                            Add-LedgerEntries @($rn.New, "$($rn.New).casemv-tmp")
+                            continue
+                        }
+                        # step 2 failed: move back so no .casemv-tmp orphan is
+                        # left for bisync to download as a new file
+                        & $rcloneExe moveto "$remote$tmpR" "$remote$oldR" @pacer --log-level ERROR --log-file $logFile 2>$null
+                    }
+                    Write-Log "WARN case-only 2-step moveto failed for $newR - falling back"
+                }
                 & $rcloneExe moveto "$remote$oldR" "$remote$newR" @pacer --log-level ERROR --log-file $logFile 2>$null
                 if ($LASTEXITCODE -eq 0) {
                     $renamedTotal++
@@ -302,9 +346,20 @@ try {
             }
             $renames.Clear()
 
-            # 2) uploads
-            $batch = @($pending | Where-Object { Test-Path -LiteralPath (Join-Path $root $_) -PathType Leaf })
-            $pending.Clear()
+            # 2) uploads - files still being written stay queued: uploading a
+            #    file mid-write ends in "corrupted on transfer" and rclone's
+            #    cleanup trashes the cloud copy, which started the 2026-08-29
+            #    delete chain. 10s of write silence is required before upload.
+            $settleCut = (Get-Date).AddSeconds(-10)
+            $hot = 0
+            $batch = @(foreach ($r in @($pending)) {
+                    $fi = Get-Item -LiteralPath (Join-Path $root $r) -Force -ErrorAction SilentlyContinue
+                    if (-not $fi -or $fi.PSIsContainer) { [void]$pending.Remove($r); continue }
+                    if ($fi.LastWriteTime -gt $settleCut) { $hot++; continue }
+                    [void]$pending.Remove($r)
+                    $r
+                })
+            if ($hot -gt 0) { Write-Log "settle: $hot hot file(s) deferred to the next flush" }
             if ($batch.Count -gt 0) {
                 $batchFile = Join-Path $stateDir "watcher-batch.txt"
                 # rclone expects "/" separators for the gdrive: destination side too
@@ -321,6 +376,11 @@ try {
                     # strict mode fails the whole batch if one file vanished mid-flight:
                     # re-queue; entries gone from disk drop out via the Test-Path filter
                     foreach ($r in $batch) { [void]$pending.Add($r) }
+                    # ledger the failed batch too: a failed upload still leaves
+                    # cloud debris events (partial copy created + "Removing
+                    # failed copy" trash) that are our own doing - without an
+                    # entry the cloud watcher applies the trash event locally
+                    Add-LedgerEntries $batch
                     $lastEvent = Get-Date   # restart the quiet timer to pace retries
                     Write-Log "re-queued $($batch.Count) file(s) after failed flush"
                 }

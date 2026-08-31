@@ -82,7 +82,11 @@ function Get-RecentUploads {
     $recent = @{}
     try {
         if (Test-Path $ledgerFile) {
-            $cut = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 900
+            # window must cover the Drive changes-API latency: a 486 MB upload
+            # on 2026-08-28 surfaced its change event only 23 min later and was
+            # downloaded back as a foreign change (the old cut was 900s, half
+            # of what the writer keeps). Keep in sync with watch-drive.ps1.
+            $cut = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 3600
             foreach ($line in Get-Content $ledgerFile -ErrorAction SilentlyContinue) {
                 if ($line -match '^(\d+)\t(.+)$' -and [long]$Matches[1] -gt $cut) { $recent[$Matches[2]] = $true }
             }
@@ -217,7 +221,13 @@ $trash = [System.Collections.Generic.HashSet[string]]::new([System.StringCompare
 $downloadedTotal = 0
 $recycledTotal = 0
 $lastSavedToken = $pageToken
-$fields = "changes(removed,fileId,file(id,name,mimeType,parents,trashed)),nextPageToken,newStartPageToken"
+$fields = "changes(removed,fileId,file(id,name,mimeType,parents,trashed,createdTime)),nextPageToken,newStartPageToken"
+# Folders recently CREATED in the cloud (rel path -> unix time first seen).
+# Downloads normally refuse to recreate a missing local parent folder (that
+# smells like a local restructuring in progress - the 2026-08-28 incident
+# resurrected moved-away trees this way); folders that are genuinely new on
+# the cloud side are the sanctioned exception and tracked here.
+$newDirs = @{}
 
 $lastHeartbeat = Get-Date
 try {
@@ -225,6 +235,9 @@ try {
         if (((Get-Date) - $lastHeartbeat).TotalMinutes -ge 10) {
             Write-Log "heartbeat: $($pending.Count) down / $($trash.Count) trash pending"
             $lastHeartbeat = Get-Date
+            # prune the new-folder memory (entries older than a day are stale)
+            $ndCut = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 86400
+            foreach ($k in @($newDirs.Keys)) { if ($newDirs[$k] -lt $ndCut) { $newDirs.Remove($k) } }
         }
         try {
             $token = $pageToken
@@ -247,6 +260,14 @@ try {
                     if ($isFolder) {
                         # keep the cache fresh; renamed dirs themselves are bisync's job
                         $dirCache[$f.id] = @{ Name = $f.name; Parent = @($f.parents)[0] }
+                        # remember genuinely new cloud folders (see $newDirs above)
+                        try {
+                            if ($f.createdTime -and ((Get-Date) - [datetime]$f.createdTime).TotalHours -lt 1) {
+                                $relDir = Resolve-RelPath $f
+                                if ($relDir) { $newDirs[$relDir] = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
+                            }
+                        }
+                        catch {}
                         continue
                     }
                     if ($f.mimeType -like "application/vnd.google-apps.*") { continue }  # gdocs, shortcuts, ...
@@ -291,6 +312,25 @@ try {
                     $skipped = $pending.Count - $batch.Count
                     $pending.Clear()
                     if ($skipped -gt 0) { Write-Log "skipped $skipped own-upload echo(es)" }
+                    # parent guard: a vanished local parent folder usually means
+                    # a local restructuring is in progress - downloading would
+                    # resurrect the old tree (2026-08-28 incident, 897 MB).
+                    # Only folders that are genuinely NEW in the cloud (tracked
+                    # in $newDirs via createdTime) may be created; everything
+                    # else is left to the nightly bisync to reconcile.
+                    $guarded = foreach ($b in $batch) {
+                        $parentRel = Split-Path $b -Parent
+                        if (-not $parentRel -or (Test-Path -LiteralPath (Join-Path $root $parentRel) -PathType Container)) { $b; continue }
+                        $isNew = $false
+                        $p = $parentRel
+                        while ($p) {
+                            if ($newDirs.ContainsKey($p)) { $isNew = $true; break }
+                            $p = Split-Path $p -Parent
+                        }
+                        if ($isNew) { $b }
+                        else { Write-Log "WARN download skipped, local parent missing (restructure in progress?): $b" }
+                    }
+                    $batch = @($guarded)
                     if ($batch.Count -gt 0) {
                         $batchFile = Join-Path $stateDir "cloud-batch.txt"
                         # rclone expects "/" separators for remote paths in --files-from
@@ -310,9 +350,22 @@ try {
                     $trash.Clear()
                 }
                 elseif ($trash.Count -gt 0) {
+                    $recentT = Get-RecentUploads
                     foreach ($t in @($trash | Sort-Object)) {
                         $abs = Join-Path $root $t
                         if (-not (Test-Path -LiteralPath $abs)) { continue }   # already gone locally
+                        # echo control for trash too: our own uploads produce
+                        # collateral trash events (rclone's "Removing failed
+                        # copy" cleanup) that must never delete the local file
+                        # - on 2026-08-29 exactly that chain erased an actively
+                        # edited file on both sides
+                        if ($recentT.ContainsKey($t)) { Write-Log "trash event skipped (own recent upload): $t"; continue }
+                        # stale-event check: if the path is live in the cloud
+                        # again (e.g. a successful upload retry after the
+                        # cleanup above), the trash event is outdated
+                        $tR = $t -replace '\\', '/'
+                        $stat = & $rcloneExe lsjson "${remoteName}:$tR" --stat @($DriveSyncConfig.Pacer) 2>$null | ConvertFrom-Json
+                        if ($stat) { Write-Log "trash event skipped (path live in cloud again): $t"; continue }
                         if ($rcloneHasLocalTrash) {
                             $isDir = Test-Path -LiteralPath $abs -PathType Container
                             if ($isDir) { & $rcloneExe purge $abs --local-use-trash -q 2>$null }
