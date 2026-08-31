@@ -18,11 +18,18 @@ $ErrorActionPreference = "Stop"
 
 # task + process
 $task = Get-ScheduledTask -TaskName "DriveSync restic backup" -ErrorAction SilentlyContinue
-$info = if ($task) { $task | Get-ScheduledTaskInfo }
+if ($task) {
+    $info = $task | Get-ScheduledTaskInfo
+    Write-Host ("Task:     {0}   last result 0x{1:X}   next run {2}" -f $task.State, $info.LastTaskResult, $info.NextRunTime)
+} else {
+    Write-Host "Task:     NOT REGISTERED"
+}
 $proc = Get-Process restic -ErrorAction SilentlyContinue
-Write-Host ("Task:     {0}   last result 0x{1:X}   next run {2}" -f `
-    ($task ? $task.State : "NOT REGISTERED"), ($info ? $info.LastTaskResult : 0), ($info ? $info.NextRunTime : "-"))
-Write-Host ("Process:  {0}" -f ($proc ? "running (PID $($proc.Id), since $($proc.StartTime.ToString('HH:mm')), $([int]($proc.WorkingSet64/1MB)) MB)" : "not running"))
+if ($proc) {
+    Write-Host ("Process:  running (PID {0}, since {1}, {2} MB)" -f $proc.Id, $proc.StartTime.ToString('HH:mm'), [int]($proc.WorkingSet64 / 1MB))
+} else {
+    Write-Host "Process:  not running"
+}
 
 # log
 $log = Join-Path $DriveSyncConfig.StateDir ("logs\backup-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
@@ -42,7 +49,9 @@ $sftp = ($BackupConfig.SshCommand -split ' ')[0] -replace 'ssh\.exe$', 'sftp.exe
 $listing = & $sftp -o BatchMode=yes -b $batch storagebox 2>&1
 $packs = @($listing | Where-Object { $_ -match '^-r' })
 $bytes = ($packs | ForEach-Object { [double]($_ -split '\s+')[4] } | Measure-Object -Sum).Sum * $step
-Write-Host ("Repo:     ~{0:N1} GB in ~{1:N0} packs{2}" -f ($bytes / 1GB), ($packs.Count * $step), ($step -gt 1 ? " (extrapolated from $Sample of 256 dirs)" : ""))
+$note = ""
+if ($step -gt 1) { $note = " (extrapolated from $Sample of 256 dirs)" }
+Write-Host ("Repo:     ~{0:N1} GB in ~{1:N0} packs{2}" -f ($bytes / 1GB), ($packs.Count * $step), $note)
 
 # rate since the previous invocation
 $cursor = Join-Path $DriveSyncConfig.StateDir "backup-status-cursor.txt"
