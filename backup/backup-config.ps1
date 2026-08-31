@@ -29,6 +29,10 @@ $BackupConfig = @{
     BackupRetries = 5
     RetryWaitSec  = 60
 
+    # until the first snapshot of a tree exists, every restart re-reads and
+    # re-chunks the whole tree; higher read concurrency shortens that phase
+    ReadConcurrency = 8
+
     MaintenanceDay = [DayOfWeek]::Sunday   # prune + check run on this weekday
     CheckSubset  = "2%"                    # share of pack data read back per check
 

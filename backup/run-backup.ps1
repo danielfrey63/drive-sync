@@ -58,27 +58,38 @@ try {
     $useVss = -not $NoVss -and $elevated
     if (-not $NoVss -and -not $elevated) { Log "not elevated: VSS disabled, locked files will be skipped" }
 
-    $args = @("backup") + $cfg.Sources + @(
-        "--exclude-file", $cfg.ExcludeFile
-        "--exclude-caches"
-        "--tag", "auto"
-        "--compression", "auto"
-    )
-    if ($useVss) { $args += "--use-fs-snapshot" }
-    if ($DryRun) { $args += "--dry-run"; $args += "--verbose" }
-
     # crashes of earlier runs leave stale locks behind; plain unlock removes
     # only those, never the lock of a live process
     & $cfg.Restic unlock @common 2>&1 | Tee-Object -FilePath $log -Append | Out-Null
 
-    Log "backup start (vss=$useVss dryrun=$DryRun) -> $($cfg.Repository)"
-    for ($attempt = 1; $attempt -le $cfg.BackupRetries; $attempt++) {
-        $out = & $cfg.Restic @args @common 2>&1 | Tee-Object -FilePath $log -Append
-        $rc = $LASTEXITCODE
-        if ($rc -in 0, 3) { break }
-        Log "backup attempt $attempt/$($cfg.BackupRetries) failed rc=$rc, retrying in $($cfg.RetryWaitSec)s"
-        Start-Sleep -Seconds $cfg.RetryWaitSec
-        & $cfg.Restic unlock @common 2>&1 | Out-Null
+    # one restic invocation PER source: each tree gets its own snapshot chain
+    # and thus its own parent. Until a tree's first snapshot exists, every
+    # restart re-reads the whole tree (index dedup prevents re-upload, but the
+    # chunking takes hours) - completing the small tree first ends that phase
+    # for it, instead of one giant snapshot that never completes.
+    $out = @(); $rc = 0
+    foreach ($source in $cfg.Sources) {
+        $args = @("backup", $source
+            "--exclude-file", $cfg.ExcludeFile
+            "--exclude-caches"
+            "--tag", "auto"
+            "--compression", "auto"
+            "--read-concurrency", $cfg.ReadConcurrency
+        )
+        if ($useVss) { $args += "--use-fs-snapshot" }
+        if ($DryRun) { $args += "--dry-run"; $args += "--verbose" }
+
+        Log "backup start [$source] (vss=$useVss dryrun=$DryRun) -> $($cfg.Repository)"
+        for ($attempt = 1; $attempt -le $cfg.BackupRetries; $attempt++) {
+            $srcOut = & $cfg.Restic @args @common 2>&1 | Tee-Object -FilePath $log -Append
+            $rc = $LASTEXITCODE
+            if ($rc -in 0, 3) { break }
+            Log "backup [$source] attempt $attempt/$($cfg.BackupRetries) failed rc=$rc, retrying in $($cfg.RetryWaitSec)s"
+            Start-Sleep -Seconds $cfg.RetryWaitSec
+            & $cfg.Restic unlock @common 2>&1 | Out-Null
+        }
+        $out += $srcOut
+        if ($rc -notin 0, 3) { break }   # skip remaining sources, keep rc for the exit path
     }
     $out | Select-Object -Last 8 | Out-Host
 
@@ -104,9 +115,12 @@ try {
 
     if ($DryRun -or $SkipMaintenance) { exit 0 }
 
+    # group-by host,paths: the C: chain and the D: chain age independently -
+    # grouped by host alone, C and D snapshots of the same day would compete
+    # for the single keep-daily slot
     Log "forget: keep all within $($cfg.KeepWithin), then $($cfg.KeepDaily) daily / $($cfg.KeepMonthly) monthly"
     & $cfg.Restic forget --keep-within $cfg.KeepWithin --keep-daily $cfg.KeepDaily `
-        --keep-monthly $cfg.KeepMonthly --group-by host @common 2>&1 | Tee-Object -FilePath $log -Append | Out-Host
+        --keep-monthly $cfg.KeepMonthly --group-by host,paths @common 2>&1 | Tee-Object -FilePath $log -Append | Out-Host
     if ($LASTEXITCODE -ne 0) { Log "forget FAILED rc=$LASTEXITCODE"; exit $LASTEXITCODE }
 
     if ((Get-Date).DayOfWeek -eq $cfg.MaintenanceDay) {
