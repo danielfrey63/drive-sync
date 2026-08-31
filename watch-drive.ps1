@@ -364,23 +364,24 @@ try {
                 $batchFile = Join-Path $stateDir "watcher-batch.txt"
                 # rclone expects "/" separators for the gdrive: destination side too
                 Set-Content -Path $batchFile -Value @($batch | ForEach-Object { $_ -replace '\\', '/' }) -Encoding UTF8
+                # ledger BEFORE the copy: on a long flush the change events of
+                # the first files arrive while the batch is still uploading, and
+                # a post-flush ledger write would let them through as echoes. A
+                # failed batch stays ledgered on purpose - its cloud debris
+                # events (partial copy + "Removing failed copy" trash) are our
+                # own doing and must not be applied locally.
+                Add-LedgerEntries $batch
                 & $rcloneExe copy $root $remote --files-from-raw $batchFile --no-traverse @strictFlag `
                     --modify-window 1s @pacer --transfers 4 --log-level INFO --log-file $logFile 2>$null
                 $exit = $LASTEXITCODE
                 Write-Log "flush: $($batch.Count) file(s), exit=$exit"
                 if ($exit -eq 0) {
                     $uploadedTotal += $batch.Count
-                    Add-LedgerEntries $batch
                 }
                 else {
                     # strict mode fails the whole batch if one file vanished mid-flight:
                     # re-queue; entries gone from disk drop out via the Test-Path filter
                     foreach ($r in $batch) { [void]$pending.Add($r) }
-                    # ledger the failed batch too: a failed upload still leaves
-                    # cloud debris events (partial copy created + "Removing
-                    # failed copy" trash) that are our own doing - without an
-                    # entry the cloud watcher applies the trash event locally
-                    Add-LedgerEntries $batch
                     $lastEvent = Get-Date   # restart the quiet timer to pace retries
                     Write-Log "re-queued $($batch.Count) file(s) after failed flush"
                 }
