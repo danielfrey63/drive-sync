@@ -53,14 +53,21 @@ $note = ""
 if ($step -gt 1) { $note = " (extrapolated from $Sample of 256 dirs)" }
 Write-Host ("Repo:     ~{0:N1} GB in ~{1:N0} packs{2}" -f ($bytes / 1GB), ($packs.Count * $step), $note)
 
-# rate since the previous invocation
+# rate since the previous invocation - only comparable when both
+# measurements used the same sampling step (extrapolation noise otherwise)
 $cursor = Join-Path $DriveSyncConfig.StateDir "backup-status-cursor.txt"
 if (Test-Path $cursor) {
     $prev = Get-Content $cursor -Raw | ConvertFrom-Json
     $dt = ((Get-Date) - [datetime]$prev.time).TotalSeconds
-    if ($dt -gt 60) {
+    if ($dt -gt 60 -and $prev.step -eq $step) {
         $rate = ($bytes - $prev.bytes) / $dt
-        Write-Host ("Rate:     {0:N1} MB/s since {1} ({2:N1} GB/day)" -f ($rate / 1MB), ([datetime]$prev.time).ToString("HH:mm"), ($rate * 86400 / 1GB))
+        if ($rate * $dt -lt -1GB) {
+            Write-Host "Rate:     n/a (sampling noise, repo did not shrink)"
+        } else {
+            Write-Host ("Rate:     {0:N1} MB/s since {1} ({2:N1} GB/day)" -f ($rate / 1MB), ([datetime]$prev.time).ToString("HH:mm"), ($rate * 86400 / 1GB))
+        }
+    } elseif ($dt -gt 60) {
+        Write-Host "Rate:     n/a (previous measurement used -Sample $(256 / $prev.step), this one -Sample $Sample)"
     }
 }
-@{ time = (Get-Date).ToString("o"); bytes = $bytes } | ConvertTo-Json -Compress | Set-Content $cursor
+@{ time = (Get-Date).ToString("o"); bytes = $bytes; step = $step } | ConvertTo-Json -Compress | Set-Content $cursor
