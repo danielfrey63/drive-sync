@@ -67,7 +67,7 @@ if (Test-Path $cursor) {
             Write-Host ("Rate:     {0:N1} MB/s since {1} ({2:N1} GB/day)" -f ($rate / 1MB), ([datetime]$prev.time).ToString("HH:mm"), ($rate * 86400 / 1GB))
         }
     } elseif ($dt -gt 60) {
-        Write-Host "Rate:     n/a (previous measurement used -Sample $(256 / $prev.step), this one -Sample $Sample)"
+        Write-Host "Rate:     n/a (previous measurement used a different -Sample; comparable again on the next call)"
     }
 }
 @{ time = (Get-Date).ToString("o"); bytes = $bytes; step = $step } | ConvertTo-Json -Compress | Set-Content $cursor
