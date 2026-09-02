@@ -156,7 +156,7 @@ The four tasks can also be created by hand in Task Scheduler (`taskschd.msc`), a
 
 Two hard-won details:
 
-- The `wscript.exe` + `run-hidden.vbs` detour exists because `pwsh -WindowStyle Hidden` still flashes a console window on start. The bisync task deliberately runs **without** the wrapper: only a directly launched process can be killed by its 6 h execution time limit.
+- The `wscript.exe` + `run-hidden.vbs` detour exists because `pwsh -WindowStyle Hidden` still flashes a console window on start. The bisync task deliberately runs **without** the wrapper: only a directly launched process can be killed by its 6 h execution time limit. The backup task (`backup/install-backup-task.ps1`) uses the shared launcher from `ai-toolbox/tools/run-hidden` instead, which waits for pwsh and returns its exit code, so the time limit and the task result keep working there; the watcher tasks could move to it with its `--detach` flag.
 - For all four tasks, disable **"Start the task only if the computer is on AC power"** and **"Stop if the computer switches to battery power"**. The PowerShell `New-ScheduledTaskSettingsSet` defaults are silently restrictive — with them, pulling the power cord kills the watchers and task starts on battery hang in the queue.
 
 </details>

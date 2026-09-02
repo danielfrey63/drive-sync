@@ -27,10 +27,10 @@ C:\  +  D:\Meine Ablage
 | `run-backup.ps1` | the pipeline: backup → forget → (Sundays) prune → check; lock, daily log, error summary. `-DryRun` scans without uploading, `-NoVss` skips the snapshot, `-SkipMaintenance` stops after the backup |
 | `backup-config.ps1` | repository, password file, retention, schedule, pinned ssh command. Machine-specific overrides go into `backup-config.local.ps1` (gitignored) |
 | `restic-excludes.txt` | what stays out (see *Decisions*) |
-| `install-backup-task.ps1` | registers the elevated scheduled task (idempotent) |
+| `install-backup-task.ps1` | registers the elevated scheduled task (idempotent). Starts pwsh windowless through `ai-toolbox/tools/run-hidden` (sibling checkout, `-ToolboxPath` overrides) — `-WindowStyle Hidden` alone flashes a console window on every run |
 | `backup-status.ps1` | task/process/log status plus repository size and upload rate measured on the box (restic logs no progress when not on a terminal) |
 
-Logs: `%LOCALAPPDATA%\drive-sync\logs\backup-<yyyyMMdd>.log`. restic cache: `%LOCALAPPDATA%\drive-sync\restic-cache`.
+Logs: `%LOCALAPPDATA%\drive-sync\logs\backup-<yyyyMMdd>.log`. restic cache: `%LOCALAPPDATA%\drive-sync\restic-cache`. Each run ends with a Windows toast (sender "DriveSync Backup", via `ai-toolbox/tools/notify`): restic's "Added to the repository" / "processed" lines on success, the failing step on error; a missing toolbox checkout only silences the toasts.
 
 ## One-time setup
 

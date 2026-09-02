@@ -35,6 +35,22 @@ function Log($msg) {
     Add-Content -Path $log -Value $line
 }
 
+# The scheduled run has no window; outcome and failures go to the Action Center
+# as toasts (ai-toolbox/tools/notify, sibling checkout). A missing toolbox only
+# silences the toasts, the backup does not depend on it.
+$toastHelper = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) "ai-toolbox\tools\notify\toast.ps1"
+if (Test-Path $toastHelper) { . $toastHelper }
+function Notify([string]$title, [string]$body) {
+    if (-not (Get-Command Show-Toast -ErrorAction SilentlyContinue)) { return }
+    try { Show-Toast -Title $title -Body $body -AppId "DriveSync.Backup" -AppName "DriveSync Backup" }
+    catch { Log "notification failed: $($_.Exception.Message)" }
+}
+function Fail([string]$msg, [int]$code) {
+    Log $msg
+    Notify "Backup FAILED" "$msg`nLog: $log"
+    exit $code
+}
+
 # single instance: a stale lock (owner PID gone) is taken over
 if (Test-Path $lock) {
     $ownerPid = Get-Content $lock -ErrorAction SilentlyContinue
@@ -110,8 +126,15 @@ try {
     }
     # 3 = some source files could not be read; the snapshot is still complete for the rest
     if ($rc -eq 3) { Log "backup finished with unreadable files (rc=3)" }
-    elseif ($rc -ne 0) { Log "backup FAILED rc=$rc"; exit $rc }
+    elseif ($rc -ne 0) { Fail "backup FAILED rc=$rc" $rc }
     else { Log "backup done" }
+
+    # restic's own summary lines (one "Added"/"processed" pair per source) make the toast body
+    $summary = @($out | Where-Object { "$_" -match '^(Added to the repository|processed \d)' } | ForEach-Object { "$_".Trim() })
+    if ($errors.Count -gt 0) { $summary += "$($errors.Count) unreadable file(s), see log" }
+    if (-not $DryRun) {
+        Notify $(if ($rc -eq 3) { "Backup done (unreadable files skipped)" } else { "Backup done" }) ($summary -join "`n")
+    }
 
     if ($DryRun -or $SkipMaintenance) { exit 0 }
 
@@ -121,16 +144,16 @@ try {
     Log "forget: keep all within $($cfg.KeepWithin), then $($cfg.KeepDaily) daily / $($cfg.KeepMonthly) monthly"
     & $cfg.Restic forget --keep-within $cfg.KeepWithin --keep-daily $cfg.KeepDaily `
         --keep-monthly $cfg.KeepMonthly --group-by host,paths @common 2>&1 | Tee-Object -FilePath $log -Append | Out-Host
-    if ($LASTEXITCODE -ne 0) { Log "forget FAILED rc=$LASTEXITCODE"; exit $LASTEXITCODE }
+    if ($LASTEXITCODE -ne 0) { Fail "forget FAILED rc=$LASTEXITCODE" $LASTEXITCODE }
 
     if ((Get-Date).DayOfWeek -eq $cfg.MaintenanceDay) {
         Log "prune"
         & $cfg.Restic prune --max-unused 5% @common 2>&1 | Tee-Object -FilePath $log -Append | Out-Host
-        if ($LASTEXITCODE -ne 0) { Log "prune FAILED rc=$LASTEXITCODE"; exit $LASTEXITCODE }
+        if ($LASTEXITCODE -ne 0) { Fail "prune FAILED rc=$LASTEXITCODE" $LASTEXITCODE }
 
         Log "check --read-data-subset=$($cfg.CheckSubset)"
         & $cfg.Restic check --read-data-subset=$cfg.CheckSubset @common 2>&1 | Tee-Object -FilePath $log -Append | Out-Host
-        if ($LASTEXITCODE -ne 0) { Log "check FAILED rc=$LASTEXITCODE"; exit $LASTEXITCODE }
+        if ($LASTEXITCODE -ne 0) { Fail "check FAILED rc=$LASTEXITCODE" $LASTEXITCODE }
     }
     Log "all done"
 }
