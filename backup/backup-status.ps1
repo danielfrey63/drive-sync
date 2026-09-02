@@ -31,12 +31,15 @@ if ($proc) {
     Write-Host "Process:  not running"
 }
 
-# log
-$log = Join-Path $DriveSyncConfig.StateDir ("logs\backup-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
-if (Test-Path $log) {
-    Get-Content $log | Select-String -Pattern "^\d{4}-\d{2}-\d{2}" | Select-Object -Last 4 | ForEach-Object { Write-Host "Log:      $($_.Line)" }
+# log: the file name is fixed when a run starts, so a run crossing midnight
+# keeps writing to yesterday's file - show the newest one, not today's
+$log = Get-ChildItem (Join-Path $DriveSyncConfig.StateDir "logs\backup-*.log") -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime | Select-Object -Last 1
+if ($log) {
+    Write-Host "Log:      $($log.Name), last write $($log.LastWriteTime.ToString('dd.MM. HH:mm'))"
+    Get-Content $log.FullName | Select-String -Pattern "^\d{4}-\d{2}-\d{2}" | Select-Object -Last 4 | ForEach-Object { Write-Host "Log:      $($_.Line)" }
 } else {
-    Write-Host "Log:      no log for today"
+    Write-Host "Log:      no backup log found"
 }
 
 # repository size: sample every (256/n)-th data subdir, extrapolate
