@@ -99,6 +99,16 @@ try {
         catch { if ($attempt -eq 5) { Write-Warning "status.json not written: $_" } else { Start-Sleep -Milliseconds 200 } }
     }
 
+    # --- conflict-loser sweep ----------------------------------------------
+    # a .conflictN loser copy inside a git worktree is a trap, not a backup:
+    # auto-staging swept 54 of them into the pmo index on 2026-09-02 and
+    # blocked every merge there. Move them out of the corpus, keep them
+    # findable (see sweep-conflicts.ps1). Never let the sweep fail the run.
+    if (-not $DryRun) {
+        try { & pwsh -NoProfile -File (Join-Path $PSScriptRoot "sweep-conflicts.ps1") -LogFile $logFile }
+        catch { Write-Warning "conflict sweep failed: $_" }
+    }
+
     # --- periodic empty-dir cleanup on the remote --------------------------
     # rmdirs only ever deletes empty directories; a folder holding just an
     # unexportable google doc looks empty in listings but the Drive API
