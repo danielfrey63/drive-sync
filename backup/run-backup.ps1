@@ -61,15 +61,6 @@ if (Test-Path $lock) {
     Log "stale lock from PID $ownerPid, taking over"
 }
 Set-Content -Path $lock -Value $PID
-
-# keep the system awake while the backup runs: the 20-min AC idle sleep
-# killed the initial upload twice on 03.09 (resume events matching the
-# failure times to the second). ES_SYSTEM_REQUIRED blocks idle sleep for
-# this process; closing the lid or choosing sleep manually still wins.
-Add-Type -Namespace DriveSync -Name Power -MemberDefinition `
-    '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint esFlags);'
-[DriveSync.Power]::SetThreadExecutionState(0x80000001) | Out-Null   # ES_CONTINUOUS | ES_SYSTEM_REQUIRED
-
 try {
     $env:RESTIC_REPOSITORY    = $cfg.Repository
     $env:RESTIC_PASSWORD_FILE = $cfg.PasswordFile
@@ -167,6 +158,5 @@ try {
     Log "all done"
 }
 finally {
-    [DriveSync.Power]::SetThreadExecutionState(0x80000000) | Out-Null   # ES_CONTINUOUS: release
     Remove-Item $lock -ErrorAction SilentlyContinue
 }
