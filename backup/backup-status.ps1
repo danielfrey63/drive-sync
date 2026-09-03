@@ -42,6 +42,22 @@ if ($log) {
     Write-Host "Log:      no backup log found"
 }
 
+# per-snapshot deltas: restic stores the run summary in the snapshot itself;
+# data_added_packed is what actually went over the wire (dedup + compression)
+try {
+    $env:RESTIC_REPOSITORY = $BackupConfig.Repository
+    $env:RESTIC_PASSWORD_FILE = $BackupConfig.PasswordFile
+    $snaps = & $BackupConfig.Restic snapshots --json -o "sftp.command=$($BackupConfig.SshCommand)" 2>$null | ConvertFrom-Json
+    foreach ($s in ($snaps | Select-Object -Last 8)) {
+        $line = "Snap:     {0}  {1}  {2}" -f $s.short_id, ([datetime]$s.time).ToString("dd.MM. HH:mm"), ($s.paths -join ",")
+        if ($s.summary) {
+            $mins = [math]::Round((([datetime]$s.summary.backup_end) - ([datetime]$s.summary.backup_start)).TotalMinutes, 1)
+            $line += "  up {0:N2} GB  new {1}  chg {2}  {3} min" -f ($s.summary.data_added_packed / 1GB), $s.summary.files_new, $s.summary.files_changed, $mins
+        }
+        Write-Host $line
+    }
+} catch { Write-Host "Snap:     Liste nicht abrufbar ($($_.Exception.Message))" }
+
 # repository size: sample every (256/n)-th data subdir, extrapolate
 $Sample = [Math]::Min([Math]::Max($Sample, 1), 256)
 $step = [int](256 / $Sample)
