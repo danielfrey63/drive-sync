@@ -86,6 +86,21 @@ C:\Users\*\.cargo\registry
 C:\Users\*\.m2\repository
 C:\Users\*\.gradle
 C:\Users\*\.nuget\packages
+# daily churn without restore value (restic diff of two C: snapshots,
+# 2026-09-03): runtime scratch, reinstallable plugins/clients, IDE caches
+C:\Users\*\AppData\Local\chrome-debug
+C:\Users\*\.claude\plugins
+C:\Users\*\.claude\file-history
+C:\Users\*\.claude\shell-snapshots
+C:\Users\*\.claude\session-env
+C:\Users\*\.claude\tasks
+C:\Users\*\.claude\projects-trash
+C:\Users\*\AppData\Local\claude-cli-nodejs
+C:\Users\*\AppData\Local\Citrix
+C:\Users\*\AppData\Roaming\Code\User\workspaceStorage
+C:\Users\*\AppData\Roaming\Code\logs
+C:\Users\*\AppData\Roaming\com.adobe.dunamis
+
 # iCloud placeholders: 34'075 dehydrated files, provider not running (dry-run 2026-08-30);
 # the content lives at Apple only and cannot be read here
 C:\Users\*\Pictures\iCloud Photos
