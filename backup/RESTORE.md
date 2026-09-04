@@ -312,7 +312,7 @@ restic -r sftp:storagebox:/home/restic -o sftp.command='ssh -S ~/.ssh/sb.sock st
 ssh -S ~/.ssh/sb.sock -O exit storagebox       # close it again
 ```
 
-**On Windows this trick is unavailable** — Win32-OpenSSH implements no `ControlMaster`. Generate a throwaway key there instead, install it with the box password, and remove it from `/home/.ssh/authorized_keys` when the drill is over:
+**On Windows it depends on the build.** The Microsoft one — what `scoop install openssh` and winget give you — cannot multiplex: a master connection dies with `getsockname failed: Not a socket`, because the native port does not implement Unix-domain sockets for this (verified with 10.0p2 on 05.09.2026). An MSYS/Cygwin build such as the `ssh.exe` bundled with Git for Windows is compiled from the Linux sources and should manage it; try the Linux commands above with that binary first. Only if that fails, generate a throwaway key, install it with the box password, and remove it from `/home/.ssh/authorized_keys` when the drill is over:
 
 ```powershell
 ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\drill" -C "secrets-drill"
