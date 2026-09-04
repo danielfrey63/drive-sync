@@ -74,6 +74,7 @@ Write-Host ("Repo:     ~{0:N1} GB in ~{1:N0} packs{2}" -f ($bytes / 1GB), ($pack
 
 # rate since the previous invocation - only comparable when both
 # measurements used the same sampling step (extrapolation noise otherwise)
+$rate = $null
 $cursor = Join-Path $DriveSyncConfig.StateDir "backup-status-cursor.txt"
 if (Test-Path $cursor) {
     $prev = Get-Content $cursor -Raw | ConvertFrom-Json
@@ -90,3 +91,17 @@ if (Test-Path $cursor) {
     }
 }
 @{ time = (Get-Date).ToString("o"); bytes = $bytes; step = $step } | ConvertTo-Json -Compress | Set-Content $cursor
+
+# ETA against the estimated final size (initial upload only; once the repo
+# passes the estimate the line disappears - then rely on the snapshot list)
+if ($BackupConfig.ExpectedRepoGB) {
+    $remainGB = $BackupConfig.ExpectedRepoGB - ($bytes / 1GB)
+    if ($remainGB -gt 0) {
+        $eta = ""
+        if ($rate -and $rate -gt 100KB) {
+            $h = [math]::Round($remainGB * 1GB / $rate / 3600, 1)
+            $eta = ", ~{0} h at current rate (about {1})" -f $h, (Get-Date).AddHours($h).ToString("dd.MM. HH:mm")
+        }
+        Write-Host ("ETA:      ~{0:N0} GB of estimated ~{1:N0} GB total remaining{2}" -f $remainGB, $BackupConfig.ExpectedRepoGB, $eta)
+    }
+}

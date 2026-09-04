@@ -36,6 +36,13 @@ $BackupConfig = @{
     MaintenanceDay = [DayOfWeek]::Sunday   # prune + check run on this weekday
     CheckSubset  = "2%"                    # share of pack data read back per check
 
+    # rough estimate of the final repository size for the backup-status ETA
+    # during the initial upload. Basis (04.09.2026): C: chain stores 85 GiB
+    # at 1.76x compression; D: is 1769 GB source, mostly media, so expect
+    # little compression. Refine or remove once the first D: snapshot exists
+    # ("restic stats --mode raw-data" then gives the real total).
+    ExpectedRepoGB = 1500
+
     FirstRunAt   = "05:00"                 # after the 04:00 bisync
     IntervalHours = 6                      # 05:00, 11:00, 17:00, 23:00
 }
