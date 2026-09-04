@@ -251,15 +251,27 @@ The restore drill in section 6 proves the data is readable **from this machine**
 
 Rules: use a machine that is not the backup client (a second laptop is ideal, a phone only tests retrieval). Read every value off the password manager and type it — never copy the password file over, never `scp` a key. Copying anything from the backup client tests the client, not the backup.
 
-**Preparation.** restic must be at least 0.14 to read a version-2 repository; older LTS packages cannot:
+### Preparation
+
+Two requirements on the drill machine, whatever it runs: restic **≥ 0.14** (older builds cannot read a version-2 repository) and an `ssh` that speaks `sntrup761x25519-sha512@openssh.com`, because the host alias below refuses anything weaker.
+
+**Linux (Ubuntu):**
 
 ```bash
 sudo apt install restic
-restic version          # need >= 0.14, ideally >= 0.16 - otherwise grab the release binary from github.com/restic/restic
-ssh -V                  # need >= 8.5 for sntrup761x25519, any current Ubuntu has it
+restic version    # >= 0.14, ideally >= 0.16 - otherwise take the release binary from github.com/restic/restic
+ssh -V            # >= 8.5 has sntrup761x25519; any current Ubuntu is fine
 ```
 
-Then the same host alias as on the client, typed by hand into `~/.ssh/config` (no `IdentityFile` — the point is to authenticate with the password):
+**Windows:** do not rely on the bundled `C:\Windows\System32\OpenSSH\ssh.exe` — version 9.5 ships without any post-quantum key exchange (verified 30.08.2026), so the alias will fail to negotiate. Install the Microsoft build and make sure it wins in `PATH`:
+
+```powershell
+scoop install restic openssh      # or: winget install restic.restic Microsoft.OpenSSH.Beta
+restic version
+ssh -Q kex | Select-String "sntrup|mlkem"   # must not be empty
+```
+
+Then the host alias, typed by hand into `~/.ssh/config` (Windows: `%USERPROFILE%\.ssh\config`). No `IdentityFile` — authenticating with the password is the whole point:
 
 ```
 Host storagebox
@@ -270,23 +282,29 @@ Host storagebox
     HostKeyAlgorithms ssh-ed25519
 ```
 
-**Test A — Storage Box password and host identity.**
+### Test A — Storage Box password and host identity
 
-```bash
+```
 ssh storagebox
 ```
 
-The first connection prints the host key fingerprint. Compare it with the one in the Hetzner Console (`SHA256:XqONwb1S0zuj5A1CDxpOSuD2hnAArV1A3wKY7Z3sdgM` at the time of writing) **before** typing yes — you are about to send a password over this connection. Then enter the box password from the password manager. A shell prompt means the stored value is correct; `exit` leaves again.
+Identical on both platforms. The first connection prints the host key fingerprint; compare it with the one in the Hetzner Console (`SHA256:XqONwb1S0zuj5A1CDxpOSuD2hnAArV1A3wKY7Z3sdgM` at the time of writing) **before** typing yes — you are about to send a password over this connection. Then enter the box password from the password manager. A shell prompt means the stored value is correct; `exit` leaves again.
 
-**Test B — restic repository password.** This is the one that cannot be reset or recovered, so it matters most. Keep the SSH session from test A open in a second terminal, or let restic prompt twice (once for SSH, once for the repository):
+### Test B — restic repository password
+
+This is the one that cannot be reset or recovered, so it matters most. restic prompts twice: once for SSH, once for the repository.
 
 ```bash
 restic -r sftp:storagebox:/home/restic snapshots --compact
 ```
 
-Type the box password when SSH asks, then the repository password from the password manager when restic asks. A snapshot listing proves the stored value opens the repository. `Fatal: wrong password or no key found` means the manager holds a wrong or outdated value — fix it now, while the client still exists and can produce the correct one.
+```powershell
+restic -r sftp:storagebox:/home/restic snapshots --compact
+```
 
-If the SSH password prompt inside restic misbehaves, open a shared connection first and let restic reuse it:
+A snapshot listing proves the stored value opens the repository. `Fatal: wrong password or no key found` means the manager holds a wrong or outdated value — fix it now, while the client still exists and can produce the correct one.
+
+If the nested SSH password prompt misbehaves, **on Linux** open a shared connection first and let restic reuse it:
 
 ```bash
 ssh -M -S ~/.ssh/sb.sock -fN storagebox        # asks for the password once
@@ -294,11 +312,42 @@ restic -r sftp:storagebox:/home/restic -o sftp.command='ssh -S ~/.ssh/sb.sock st
 ssh -S ~/.ssh/sb.sock -O exit storagebox       # close it again
 ```
 
-**Test C — Hetzner account.** Sign in to `console.hetzner.com` in the browser of the second machine, with password and second factor from the password manager. This is the account that owns the box snapshots and the password reset, so it is part of the recovery path.
+**On Windows this trick is unavailable** — Win32-OpenSSH implements no `ControlMaster`. Generate a throwaway key there instead, install it with the box password, and remove it from `/home/.ssh/authorized_keys` when the drill is over:
+
+```powershell
+ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\drill" -C "secrets-drill"
+Get-Content "$env:USERPROFILE\.ssh\drill.pub" | ssh storagebox install-ssh-key
+restic -r sftp:storagebox:/home/restic -o "sftp.command=ssh -i $env:USERPROFILE/.ssh/drill storagebox -s sftp" snapshots --compact
+```
+
+### Test C — Hetzner account
+
+Sign in to `console.hetzner.com` in the browser of the drill machine, with password and second factor from the password manager. This is the account that owns the box snapshots, the password reset and the delete protection, so it is part of the recovery path.
 
 **Optional, and the real proof:** restore one small folder here, exactly as in scenario 4 step 5. A restore that works on a machine that has never seen this backup before is the only complete answer.
 
-**Afterwards**, remove what the drill left behind: the `known_hosts` entry and the `Host storagebox` block are harmless, but the second machine now has credentials in its shell history. Clear it (`history -c` plus `~/.bash_history`), and do not store the passwords there.
+### Quick variant on the client itself
+
+Weaker, because it does not prove machine independence, but it catches a wrong stored value in a minute — read the value off your phone and type it, with the password file switched off for this one shell:
+
+```powershell
+Remove-Item Env:RESTIC_PASSWORD_FILE
+restic snapshots --compact
+```
+
+### Afterwards
+
+The `known_hosts` entry and the `Host storagebox` block are harmless leftovers, but the drill machine now has credentials in its shell history, and possibly a drill key on the box.
+
+```bash
+history -c && rm -f ~/.bash_history
+```
+
+```powershell
+Remove-Item (Get-PSReadLineOption).HistorySavePath
+```
+
+If you used the Windows fallback: reconnect and reduce `/home/.ssh/authorized_keys` to the client key again, then delete `~\.ssh\drill*`.
 
 ### Two-factor recovery codes
 

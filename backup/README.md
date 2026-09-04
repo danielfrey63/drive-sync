@@ -127,7 +127,7 @@ $o = "sftp.command=C:/Users/<you>/scoop/apps/openssh/current/ssh.exe storagebox 
 
 Paths inside the repository are written `/C/Users/...` and `/D/Meine Ablage/...` — drive letters become the first path component, backslashes become slashes. Restoring a full snapshot recreates that layout under `--target` (`D:\restore\C\Users\...`); the one harmless error you will see is a failed timestamp on the read-only `Users` directory. `restic mount` does not exist on Windows (no FUSE) — use `ls`, `find`, `dump` and `restore --include` instead.
 
-Step-by-step recovery scenarios — lost file, dead disk, new machine, ransomware — are in [RESTORE.md](RESTORE.md).
+Step-by-step recovery scenarios — lost file, dead disk, new machine, ransomware — are in [RESTORE.md](RESTORE.md), together with two drills worth running: the quarterly **restore drill** (fifteen minutes on this machine) and the **secrets drill**, which repeats the first steps of a total loss from a second machine with nothing but the password manager. The secrets drill has commands for both Linux and Windows; on Windows note that the bundled `System32` `ssh.exe` cannot negotiate the post-quantum key exchange this setup requires.
 
 ## Decisions
 
