@@ -10,6 +10,7 @@ Scenarios, from harmless to bad:
 4. [The whole machine is gone](#4-the-whole-machine-is-gone)
 5. [Ransomware](#5-ransomware)
 6. [Restore drill (do this quarterly)](#6-restore-drill-do-this-quarterly)
+7. [Secrets drill (from a second machine)](#7-secrets-drill-from-a-second-machine)
 
 Then: [Prerequisites](#prerequisites-every-scenario-needs-these), [What the backup does not contain](#what-the-backup-does-not-contain), [Set up now, not later](#set-up-now-not-later).
 
@@ -243,6 +244,65 @@ Remove-Item "D:\restore" -Recurse -Force
 ```
 
 Once a year, do scenario 4 for real on a spare machine or a VM: the secrets from the password manager, nothing from this machine. That is the only test of the thing that actually fails in practice — the secret you thought you had saved.
+
+## 7. Secrets drill (from a second machine)
+
+The restore drill in section 6 proves the data is readable **from this machine**. It says nothing about the case that actually happens: the machine is gone and all you have is the password manager. This drill closes that gap and is a dry run of [scenario 4](#4-the-whole-machine-is-gone), steps 1–4.
+
+Rules: use a machine that is not the backup client (a second laptop is ideal, a phone only tests retrieval). Read every value off the password manager and type it — never copy the password file over, never `scp` a key. Copying anything from the backup client tests the client, not the backup.
+
+**Preparation.** restic must be at least 0.14 to read a version-2 repository; older LTS packages cannot:
+
+```bash
+sudo apt install restic
+restic version          # need >= 0.14, ideally >= 0.16 - otherwise grab the release binary from github.com/restic/restic
+ssh -V                  # need >= 8.5 for sntrup761x25519, any current Ubuntu has it
+```
+
+Then the same host alias as on the client, typed by hand into `~/.ssh/config` (no `IdentityFile` — the point is to authenticate with the password):
+
+```
+Host storagebox
+    HostName uXXXXXX.your-storagebox.de
+    User uXXXXXX
+    Port 23
+    KexAlgorithms sntrup761x25519-sha512@openssh.com
+    HostKeyAlgorithms ssh-ed25519
+```
+
+**Test A — Storage Box password and host identity.**
+
+```bash
+ssh storagebox
+```
+
+The first connection prints the host key fingerprint. Compare it with the one in the Hetzner Console (`SHA256:XqONwb1S0zuj5A1CDxpOSuD2hnAArV1A3wKY7Z3sdgM` at the time of writing) **before** typing yes — you are about to send a password over this connection. Then enter the box password from the password manager. A shell prompt means the stored value is correct; `exit` leaves again.
+
+**Test B — restic repository password.** This is the one that cannot be reset or recovered, so it matters most. Keep the SSH session from test A open in a second terminal, or let restic prompt twice (once for SSH, once for the repository):
+
+```bash
+restic -r sftp:storagebox:/home/restic snapshots --compact
+```
+
+Type the box password when SSH asks, then the repository password from the password manager when restic asks. A snapshot listing proves the stored value opens the repository. `Fatal: wrong password or no key found` means the manager holds a wrong or outdated value — fix it now, while the client still exists and can produce the correct one.
+
+If the SSH password prompt inside restic misbehaves, open a shared connection first and let restic reuse it:
+
+```bash
+ssh -M -S ~/.ssh/sb.sock -fN storagebox        # asks for the password once
+restic -r sftp:storagebox:/home/restic -o sftp.command='ssh -S ~/.ssh/sb.sock storagebox -s sftp' snapshots --compact
+ssh -S ~/.ssh/sb.sock -O exit storagebox       # close it again
+```
+
+**Test C — Hetzner account.** Sign in to `console.hetzner.com` in the browser of the second machine, with password and second factor from the password manager. This is the account that owns the box snapshots and the password reset, so it is part of the recovery path.
+
+**Optional, and the real proof:** restore one small folder here, exactly as in scenario 4 step 5. A restore that works on a machine that has never seen this backup before is the only complete answer.
+
+**Afterwards**, remove what the drill left behind: the `known_hosts` entry and the `Host storagebox` block are harmless, but the second machine now has credentials in its shell history. Clear it (`history -c` plus `~/.bash_history`), and do not store the passwords there.
+
+### Two-factor recovery codes
+
+The Hetzner account has 2FA. If the device holding the TOTP secret is lost, the account is locked - and with it the box snapshots, the password reset and every other emergency lever in this runbook. The recovery codes must therefore live somewhere that is neither the backup client nor the phone: printed on paper, or in a second password manager vault. Generate a fresh set under `accounts.hetzner.com` → 2FA settings if you did not keep the ones from the original setup.
 
 ---
 
