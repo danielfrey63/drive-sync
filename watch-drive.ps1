@@ -10,8 +10,10 @@
 #  - Renames become server-side "rclone moveto" (no re-upload); if the old
 #    path does not exist in the cloud, the new path is uploaded instead.
 #  - Deletes are verified at flush time (path must really be gone locally),
-#    capped at $maxDeletes per flush (larger delete storms are left to the
-#    nightly bisync) and go to the Drive TRASH (30 days) - never hard-deleted.
+#    capped at $maxDeletes per flush and go to the Drive TRASH (30 days) -
+#    never hard-deleted. A storm above the cap is NOT simply dropped: its
+#    paths are journalled (delete-journal.ps1), because bisync alone cannot
+#    always read them as deletions - see there.
 #  - Exclude rules are DERIVED FROM filters.txt (shared filter-rules.ps1).
 #  - While the bisync wrapper's lock is active, flushing is deferred.
 #  - Watcher buffer overflows are only logged: the nightly bisync catches up.
@@ -36,6 +38,7 @@ $lockFile = Join-Path $stateDir "watcher.lock"
 $bisyncLock = Join-Path $stateDir "sync.lock"
 $lastSeenFile = Join-Path $stateDir "watcher-lastseen.txt"
 $maxDeletes = $DriveSyncConfig.MaxDeletes
+$journalDrops = [bool]$DriveSyncConfig.JournalDroppedDeletes
 $pacer = $DriveSyncConfig.Pacer
 # custom build (release + --files-from-strict backport) if deployed, else PATH rclone
 $rcloneExe = Join-Path $stateDir "bin\rclone.exe"
@@ -91,6 +94,9 @@ if (Test-Path $lockFile) {
     }
 }
 Set-Content $lockFile $PID
+
+# --- journal for deletes the cap drops --------------------------------------
+. (Join-Path $PSScriptRoot "delete-journal.ps1")
 
 # --- derive exclude sets from filters.txt -----------------------------------
 . (Join-Path $PSScriptRoot "filter-rules.ps1")
@@ -389,7 +395,14 @@ try {
 
             # 3) deletes: verify, cap, then move to the Drive trash
             if ($deletes.Count -gt $maxDeletes) {
-                Write-Log "WARN $($deletes.Count) deletes exceed cap $maxDeletes - leaving them to the nightly bisync"
+                # The cap is right - a runaway delete must not propagate at
+                # once. But handing the storm to bisync without a record does
+                # not defer the delete, it can invert it: bisync compares
+                # against the previous baseline, and a path created after that
+                # baseline is not in it, so bisync reads "new on path2" and
+                # copies the file back. Journal what we drop.
+                if ($journalDrops) { Add-DroppedDeletes $stateDir "path1" @($deletes) }
+                Write-Log "WARN $($deletes.Count) deletes exceed cap $maxDeletes - journalled for the nightly bisync"
                 $deletes.Clear()
             }
             elseif ($deletes.Count -gt 0) {

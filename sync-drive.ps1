@@ -33,6 +33,7 @@ $logDir = Join-Path $stateDir "logs"
 $lockFile = Join-Path $stateDir "sync.lock"
 $statusFile = Join-Path $stateDir "status.json"
 New-Item -ItemType Directory -Force $logDir | Out-Null
+. (Join-Path $PSScriptRoot "bisync-index.ps1")
 
 # --- lock handling ----------------------------------------------------------
 if (Test-Path $lockFile) {
@@ -47,6 +48,16 @@ if (Test-Path $lockFile) {
 Set-Content -Path $lockFile -Value $PID
 
 try {
+    # --- deletes the watchers dropped at the cap ----------------------------
+    # Report only, for now: how many of them would bisync misread as "new on
+    # the other side" if nothing told it otherwise? Reads the journals and the
+    # baselines and changes neither, so this is safe to leave running while the
+    # numbers are still being judged. A -Resync rebuilds the baseline from
+    # scratch and makes the whole question moot.
+    if (-not $Resync -and $DriveSyncConfig.JournalDroppedDeletes) {
+        Write-SpliceReport $localPath $remote $stateDir | Out-Null
+    }
+
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $logFile = Join-Path $logDir "bisync-$stamp.log"
     $rcArgs = @(

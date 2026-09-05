@@ -13,8 +13,8 @@
 #  - FILE changes are downloaded via "rclone copy --files-from-raw
 #    --no-traverse --update" (--update never overwrites a newer local file).
 #  - Cloud-side TRASHING moves the local copy to the Windows recycle bin
-#    (never a hard delete), capped at $maxDeletes per cycle - larger delete
-#    storms are left to the nightly bisync.
+#    (never a hard delete), capped at $maxDeletes per cycle. A storm above
+#    the cap is journalled (delete-journal.ps1) rather than dropped.
 #  - Cloud-side folder RENAMES and permanent deletions are left to the
 #    nightly bisync (resolving the old local path would need a full
 #    fileId->path index).
@@ -48,6 +48,7 @@ $lockFile = Join-Path $stateDir "cloud-watcher.lock"
 $tokenFile = Join-Path $stateDir "cloud-watcher-pagetoken.txt"
 $bisyncLock = Join-Path $stateDir "sync.lock"
 $maxDeletes = $DriveSyncConfig.MaxDeletes
+$journalDrops = [bool]$DriveSyncConfig.JournalDroppedDeletes
 New-Item -ItemType Directory -Force $stateDir | Out-Null
 # custom build (release + --files-from-strict backport) if deployed, else PATH
 # rclone. Downloads deliberately do NOT use --files-from-strict: a file may
@@ -131,6 +132,9 @@ if (Test-Path $lockFile) {
     }
 }
 Set-Content $lockFile $PID
+
+# --- journal for trash events the cap drops ---------------------------------
+. (Join-Path $PSScriptRoot "delete-journal.ps1")
 
 # --- exclude rules from filters.txt -----------------------------------------
 . (Join-Path $PSScriptRoot "filter-rules.ps1")
@@ -346,7 +350,14 @@ try {
 
                 # 2) cloud trash -> local recycle bin (verified, capped)
                 if ($trash.Count -gt $maxDeletes) {
-                    Write-Log "WARN $($trash.Count) trashed paths exceed cap $maxDeletes - leaving them to the nightly bisync"
+                    # Mirror of the path1 case in watch-drive.ps1: handing a
+                    # trash storm to bisync without a record can invert it.
+                    # A file created on another device after the last
+                    # baseline, downloaded here, then deleted there is not in
+                    # that baseline - bisync reads "new on path1" and uploads
+                    # it back. Journal what we drop.
+                    if ($journalDrops) { Add-DroppedDeletes $stateDir "path2" @($trash) }
+                    Write-Log "WARN $($trash.Count) trashed paths exceed cap $maxDeletes - journalled for the nightly bisync"
                     $trash.Clear()
                 }
                 elseif ($trash.Count -gt 0) {

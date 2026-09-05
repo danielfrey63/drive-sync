@@ -97,7 +97,8 @@ Defaults live in [`config.ps1`](config.ps1); machine-specific overrides go into 
 | `LocalRoot` | local mirror root | `D:\Meine Ablage` |
 | `RemoteName` | rclone remote name | `gdrive` |
 | `StateDir` | runtime state (logs, locks, cursors) | `%LOCALAPPDATA%\drive-sync` |
-| `MaxDeletes` | reactive delete cap per flush; larger storms go to the nightly bisync | `50` |
+| `MaxDeletes` | reactive delete cap per flush; larger storms are journalled and left to the nightly bisync | `50` |
+| `JournalDroppedDeletes` | record the paths a `MaxDeletes` storm dropped, so the nightly run can tell a deletion from a new cloud file | `$true` |
 | `PollSeconds` | Changes API poll interval | `60` |
 | `BisyncDailyAt` | daily start time of the reconciliation bisync (`HH:mm`) | `04:00` |
 | `EmptyDirCleanupDays` | days between remote empty-dir cleanups (`rclone rmdirs` after a successful bisync); `0` disables | `30` |
@@ -135,6 +136,7 @@ Include/exclude rules live in [`filters.txt`](filters.txt) — changing them req
 | `watcher-status.json`, `cloud-watcher-status.json` | counters for `sync-status.ps1` |
 | `cloud-watcher-pagetoken.txt` | persisted Changes API cursor; deleting it restarts from "now" (the gap is closed by the next bisync) |
 | `upload-ledger.txt` | echo control: own uploads of the last 30 min |
+| `dropped-deletes-path1.txt`, `dropped-deletes-path2.txt` | paths whose delete a `MaxDeletes` storm dropped, per bisync side; consumed and cleared by the next nightly run |
 | `rmdirs-last.txt` | timestamp of the last remote empty-dir cleanup |
 | `watcher-lastseen.txt`, `watcher-catchup.log` | liveness stamp of the upload watcher ("everything up to here is uploaded or captured" — only advances while nothing is pending) and the log of the last start-up catch-up |
 | `watchdog.log`, `watchdog-pause` | watchdog log; the pause marker suppresses restarts during maintenance (auto-discarded after 6 h; a first line `pid:<n>` keeps it alive as long as that process runs) |
