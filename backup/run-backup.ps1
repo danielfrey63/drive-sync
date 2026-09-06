@@ -45,9 +45,9 @@ function Notify([string]$title, [string]$body) {
     try { Show-Toast -Title $title -Body $body -AppId "DriveSync.Backup" -AppName "DriveSync Backup" }
     catch { Log "notification failed: $($_.Exception.Message)" }
 }
-function Fail([string]$msg, [int]$code) {
+function Fail([string]$msg, [int]$code, [string]$title = "Backup FAILED") {
     Log $msg
-    Notify "Backup FAILED" "$msg`nLog: $log"
+    Notify $title "$msg`nLog: $log"
     exit $code
 }
 
@@ -146,14 +146,23 @@ try {
         --keep-monthly $cfg.KeepMonthly --group-by host,paths @common 2>&1 | Tee-Object -FilePath $log -Append | Out-Host
     if ($LASTEXITCODE -ne 0) { Fail "forget FAILED rc=$LASTEXITCODE" $LASTEXITCODE }
 
-    if ((Get-Date).DayOfWeek -eq $cfg.MaintenanceDay) {
+    # maintenance once per maintenance day, not on every slot of it: a stamp
+    # file carries the date of the last run, so the other three Sunday slots
+    # skip prune and check instead of repeating them
+    $stamp = Join-Path $DriveSyncConfig.StateDir "backup-maintenance.txt"
+    $today = (Get-Date).ToString("yyyy-MM-dd")
+    $lastMaintenance = if (Test-Path $stamp) { (Get-Content $stamp -Raw).Trim() } else { "" }
+    if ((Get-Date).DayOfWeek -eq $cfg.MaintenanceDay -and $lastMaintenance -ne $today) {
+        Set-Content -Path $stamp -Value $today
         Log "prune"
         & $cfg.Restic prune --max-unused 5% @common 2>&1 | Tee-Object -FilePath $log -Append | Out-Host
-        if ($LASTEXITCODE -ne 0) { Fail "prune FAILED rc=$LASTEXITCODE" $LASTEXITCODE }
+        if ($LASTEXITCODE -ne 0) { Fail "prune FAILED rc=$LASTEXITCODE" $LASTEXITCODE "Maintenance FAILED" }
 
+        # $($...) is required: "--flag=$cfg.CheckSubset" would expand $cfg alone
+        # and append the literal ".CheckSubset" (silently broke check until 06.09.2026)
         Log "check --read-data-subset=$($cfg.CheckSubset)"
-        & $cfg.Restic check --read-data-subset=$cfg.CheckSubset @common 2>&1 | Tee-Object -FilePath $log -Append | Out-Host
-        if ($LASTEXITCODE -ne 0) { Fail "check FAILED rc=$LASTEXITCODE" $LASTEXITCODE }
+        & $cfg.Restic check "--read-data-subset=$($cfg.CheckSubset)" @common 2>&1 | Tee-Object -FilePath $log -Append | Out-Host
+        if ($LASTEXITCODE -ne 0) { Fail "check FAILED rc=$LASTEXITCODE" $LASTEXITCODE "Maintenance FAILED" }
     }
     Log "all done"
 }
