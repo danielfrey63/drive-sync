@@ -18,8 +18,15 @@
 # is the only consumer. Dot-source this file, then:
 #   . (Join-Path $PSScriptRoot "delete-journal.ps1")
 #   Add-DroppedDeletes $stateDir "path1" $paths
-#   $paths = Read-DroppedDeletes $stateDir "path1"
+#   $paths = Read-DroppedDeletes $stateDir "path1" -Claim
 #   Clear-DroppedDeletes $stateDir "path1"
+#
+# One writer per file (the local watcher owns path1, the cloud watcher path2), so
+# writers never meet. Reader against writer is serialised by the existing PID lock
+# "sync.lock": both watchers skip their whole flush cycle while a live process
+# holds it, and the consumer runs under it. That leaves one window - the wrapper
+# takes the lock without waiting for a watcher that is ALREADY mid-flush, and an
+# upload batch runs for minutes. -Claim closes it.
 
 # Entries older than this are ignored on read and dropped on the next write: if
 # the consumer never runs, a stale path must not accumulate forever. Generous
@@ -28,6 +35,11 @@ $script:JournalMaxAgeDays = 7
 
 function Get-DeleteJournalPath([string]$stateDir, [string]$side) {
     Join-Path $stateDir "dropped-deletes-$side.txt"
+}
+
+# the batch a consumer has taken aside; never written to by a watcher
+function Get-DeleteClaimPath([string]$stateDir, [string]$side) {
+    (Get-DeleteJournalPath $stateDir $side) + ".consuming"
 }
 
 function Add-DroppedDeletes([string]$stateDir, [string]$side, [string[]]$rels) {
@@ -43,26 +55,56 @@ function Add-DroppedDeletes([string]$stateDir, [string]$side, [string[]]$rels) {
     catch { }
 }
 
-function Read-DroppedDeletes([string]$stateDir, [string]$side) {
+# -Claim renames the journal aside and reads the renamed copy. The rename is
+# atomic on NTFS, so a watcher appending at that very moment writes into a fresh
+# journal and its entries survive; plain read-then-clear would drop them.
+# Without -Claim nothing is moved and both files are read - a peek at everything
+# still pending, including a batch a dead consumer left behind.
+function Read-DroppedDeletes([string]$stateDir, [string]$side, [switch]$Claim) {
     try {
         $file = Get-DeleteJournalPath $stateDir $side
-        if (-not (Test-Path $file)) { return @() }
+        # NOT $claim: PowerShell variables are case-insensitive, so that name
+        # would overwrite the [switch]$Claim parameter - and the type constraint
+        # then throws on the string, straight into the catch below
+        $claimFile = Get-DeleteClaimPath $stateDir $side
+        if ($Claim -and (Test-Path $file)) {
+            if (Test-Path $claimFile) {
+                # a previous consumer died between claim and clear: fold the new
+                # lines into its batch instead of overwriting it. Not atomic, but
+                # reaching here already requires a dead consumer
+                Add-Content -Path $claimFile -Value (Get-Content $file) -Encoding UTF8
+                Remove-Item $file -Force -Confirm:$false -ErrorAction SilentlyContinue
+            }
+            else { Move-Item -LiteralPath $file -Destination $claimFile -Force }
+        }
+        $sources = if ($Claim) { @($claimFile) } else { @($file, $claimFile) }
         $cut = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - ($script:JournalMaxAgeDays * 86400)
         $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-        foreach ($line in Get-Content $file -ErrorAction SilentlyContinue) {
-            if ($line -notmatch '^(\d+)\t(.+)$') { continue }
-            if ([long]$Matches[1] -le $cut) { continue }
-            [void]$seen.Add($Matches[2])
+        foreach ($src in $sources) {
+            if (-not (Test-Path $src)) { continue }
+            foreach ($line in Get-Content $src -ErrorAction SilentlyContinue) {
+                if ($line -notmatch '^(\d+)\t(.+)$') { continue }
+                if ([long]$Matches[1] -le $cut) { continue }
+                [void]$seen.Add($Matches[2])
+            }
         }
         return @($seen)
     }
-    catch { return @() }
+    # must not abort the caller (the watcher would die, the bisync would skip its
+    # run), but must not be invisible either: a silent catch here hid a variable
+    # collision that made every read return nothing
+    catch { Write-Host "delete journal read failed ($side): $($_.Exception.Message)"; return @() }
 }
 
-function Clear-DroppedDeletes([string]$stateDir, [string]$side) {
+# Drops the claimed batch only - what a watcher appended in the meantime lives in
+# the fresh journal and stays. -All drops that too (reset, tests).
+function Clear-DroppedDeletes([string]$stateDir, [string]$side, [switch]$All) {
     try {
-        $file = Get-DeleteJournalPath $stateDir $side
-        if (Test-Path $file) { Remove-Item $file -Force -Confirm:$false -ErrorAction SilentlyContinue }
+        $files = @(Get-DeleteClaimPath $stateDir $side)
+        if ($All) { $files += Get-DeleteJournalPath $stateDir $side }
+        foreach ($f in $files) {
+            if (Test-Path $f) { Remove-Item $f -Force -Confirm:$false -ErrorAction SilentlyContinue }
+        }
     }
-    catch { }
+    catch { Write-Host "delete journal clear failed ($side): $($_.Exception.Message)" }
 }

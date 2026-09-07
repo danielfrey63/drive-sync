@@ -117,7 +117,11 @@ function Write-SpliceReport([string]$localRoot, [string]$remote, [string]$stateD
         return $out
     }
     foreach ($side in @("path1", "path2")) {
-        $journal = @(Read-DroppedDeletes $stateDir $side)
+        $journal = @(Read-DroppedDeletes $stateDir $side -Claim)
+        # consumed right away: the batch is in memory and the report changes
+        # nothing, so a retry could not salvage anything. The splice will move
+        # this to after a successful write, where a crash IS worth retrying.
+        Clear-DroppedDeletes $stateDir $side
         if ($journal.Count -eq 0) { continue }
         $m = Measure-SpliceCandidates $localRoot $listings $side $journal
         # the concatenation needs its own parentheses: -f binds tighter than +,
@@ -128,8 +132,6 @@ function Write-SpliceReport([string]$localRoot, [string]$remote, [string]$stateD
             ) -f $side, $m.Total, $m.Ready.Count, $m.InBaseline, $m.Recreated, $m.UnsafeName.Count)
         foreach ($p in @($m.Ready | Select-Object -First 5)) { Write-Host "    would splice: $p" }
         foreach ($p in @($m.UnsafeName | Select-Object -First 3)) { Write-Host "    unsafe name: $p" }
-        # consumed: the entries describe the baseline of THIS run, not the next one
-        Clear-DroppedDeletes $stateDir $side
         $out += $m
     }
     return $out
