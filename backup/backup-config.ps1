@@ -36,6 +36,58 @@ $BackupConfig = @{
     MaintenanceDay = [DayOfWeek]::Sunday   # prune + check run on this weekday
     CheckSubset  = "2%"                    # share of pack data read back per check
 
+    # Ransomware tripwire (see backup-metrics.ps1 for the reasoning). All
+    # thresholds are shares of the chain's own size, because C: and D: differ
+    # by a factor of ~500 in file count.
+    #
+    # Changed and new are judged SEPARATELY, and that separation is the whole
+    # point: ransomware REPLACES existing files, a bulk import ADDS files.
+    # Lumping them into one rate throws that distinction away and turns a
+    # 60'000-photo import into a false alarm (measured, 08.09.2026).
+    #
+    # Changed rate = changed / files in the snapshot. Measured maxima over the
+    # first 36 snapshots: 0.47 % on C:, 0.003 % on D: - the limits leave 6x
+    # resp. 300x headroom.
+    AnomalyChangedRate = @{
+        'C:\'             = 0.03
+        'D:\Meine Ablage' = 0.01
+        '*'               = 0.03
+    }
+    # New rate = new / files. Deliberately loose: adding files is what a
+    # backup is for. It exists to catch rename-encryption
+    # (foo.docx -> foo.docx.locked), which the shrink check sees as well.
+    # Measured maxima: 1.33 % on C:, 0.25 % on D:.
+    AnomalyNewRate = @{
+        'C:\'             = 0.15
+        'D:\Meine Ablage' = 0.10
+        '*'               = 0.15
+    }
+    # Slow burn: malware encrypting a little per slot stays under every
+    # per-snapshot limit. The changed share summed over a window catches it.
+    # This does NOT reintroduce a poisonable baseline - the limit stays
+    # static, only the measurement window widens. Measured worst day:
+    # 2.5 % on C:, 0.26 % on D:.
+    AnomalyWindowHours       = 24
+    AnomalyWindowChangedRate = @{
+        'C:\'             = 0.08
+        'D:\Meine Ablage' = 0.03
+        '*'               = 0.08
+    }
+    # Shrink = share of files the chain lost against its previous snapshot.
+    # C: needs a wider limit than D:, and that is not laziness: Windows churns
+    # temp and cache trees, one measured slot legitimately lost 3.53 % of the
+    # file count. D: is an archive - it grows, it does not shed (max 0.26 %).
+    AnomalyShrinkRate = @{
+        'C:\'             = 0.10
+        'D:\Meine Ablage' = 0.02
+        '*'               = 0.05
+    }
+    AnomalyMinFiles      = 2000   # floor: fewer touched files never trips, whatever the rate
+    # corroborating hints in the message, never triggers on their own
+    AnomalyVolumeFactor  = 10     # upload vs. median of the chain's last 20 runs
+    AnomalyVolumeFloorGB = 5      # below this upload both hints are noise
+    AnomalyRatioFloor    = 1.05   # data_added / data_added_packed
+
     # optional: estimated final repository size in GB; when set, backup-status
     # shows an ETA while the repository is still below it. Used during the
     # initial upload (completed 04.09.2026 at 1.318 TiB stored, 1.10x

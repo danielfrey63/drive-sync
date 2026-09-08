@@ -7,14 +7,52 @@
 #
 # -Sample <n>  list only n of the 256 data subdirectories and extrapolate
 #              (default 32, ~5 s; -Sample 256 is exact, ~1 min)
+# -Audit       replay the ransomware tripwire over the whole snapshot history
+#              and exit. Use this after changing a threshold: a calibrated
+#              detector is silent on every snapshot that has already happened.
 
 param(
-    [int]$Sample = 32
+    [int]$Sample = 32,
+    [switch]$Audit
 )
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "..\config.ps1")
 . (Join-Path $PSScriptRoot "backup-config.ps1")
+. (Join-Path $PSScriptRoot "backup-metrics.ps1")
+
+if ($Audit) {
+    $all = Get-BackupSnapshotStats -Config $BackupConfig
+    if ($all.Count -eq 0) { Write-Host "no snapshots with a summary found"; exit 1 }
+    Write-Host ("{0,-14} {1,-16} {2,9} {3,9} {4,9} {5,7} {6,7}  {7}" -f "TIME", "CHAIN", "CHANGED", "NEW", "SHRINK", "RATIO", "UP GB", "VERDICT")
+    $tripped = 0
+    foreach ($s in $all) {
+        $verdict = Test-BackupAnomaly -Config $BackupConfig -Stat $s -History @($all | Where-Object { $_.Time -lt $s.Time })
+        $shrink = "n/a"
+        if ($null -ne $s.ShrinkRate) { $shrink = "{0:P2}" -f $s.ShrinkRate }
+        $mark = $verdict.Level
+        if ($s.IsInitial) { $mark = "exempt (initial)" }
+        if ($verdict.Level -eq "alarm") { $tripped++ }
+        Write-Host ("{0,-14} {1,-16} {2,9:P2} {3,9:P2} {4,9} {5,7:N2} {6,7:N1}  {7}" -f `
+            $s.Time.ToString("dd.MM. HH:mm"), $s.Path, $s.ChangedRate, $s.NewRate, $shrink, $s.Ratio, ($s.Packed / 1GB), $mark)
+        foreach ($r in $verdict.Reasons) { Write-Host "                 -> $r" }
+        foreach ($n in $verdict.Notes)   { Write-Host "                 -> note: $n" }
+    }
+    Write-Host ""
+    Write-Host ("Audit: {0} of {1} snapshots would raise an alarm with the current thresholds." -f $tripped, $all.Count)
+    $limitMaps = [ordered]@{
+        "changed" = $BackupConfig.AnomalyChangedRate
+        "new"     = $BackupConfig.AnomalyNewRate
+        "shrink"  = $BackupConfig.AnomalyShrinkRate
+        ("{0}h changed" -f $BackupConfig.AnomalyWindowHours) = $BackupConfig.AnomalyWindowChangedRate
+    }
+    foreach ($name in $limitMaps.Keys) {
+        foreach ($k in $limitMaps[$name].Keys) {
+            Write-Host ("  {0,-12} limit {1,-18} {2:P0}" -f $name, $k, $limitMaps[$name][$k])
+        }
+    }
+    exit 0
+}
 
 # task + process
 $task = Get-ScheduledTask -TaskName "DriveSync restic backup" -ErrorAction SilentlyContinue
@@ -42,19 +80,22 @@ if ($log) {
     Write-Host "Log:      no backup log found"
 }
 
+# tripwire latch: while it is set, forget/prune/check are disabled
+$latch = Get-BackupAnomalyLatch (Join-Path $DriveSyncConfig.StateDir "backup-anomaly.json")
+if ($latch) {
+    Write-Host "Tripwire: LATCHED since $($latch.time) - maintenance is halted"
+    foreach ($r in @($latch.reasons)) { Write-Host "Tripwire:   $r" }
+    Write-Host "Tripwire: release with .\backup\run-backup.ps1 -ClearAnomaly"
+} else {
+    Write-Host "Tripwire: armed, no anomaly latched"
+}
+
 # per-snapshot deltas: restic stores the run summary in the snapshot itself;
 # data_added_packed is what actually went over the wire (dedup + compression)
 try {
-    $env:RESTIC_REPOSITORY = $BackupConfig.Repository
-    $env:RESTIC_PASSWORD_FILE = $BackupConfig.PasswordFile
-    $snaps = & $BackupConfig.Restic snapshots --json -o "sftp.command=$($BackupConfig.SshCommand)" 2>$null | ConvertFrom-Json
-    foreach ($s in ($snaps | Select-Object -Last 8)) {
-        $line = "Snap:     {0}  {1}  {2}" -f $s.short_id, ([datetime]$s.time).ToString("dd.MM. HH:mm"), ($s.paths -join ",")
-        if ($s.summary) {
-            $mins = [math]::Round((([datetime]$s.summary.backup_end) - ([datetime]$s.summary.backup_start)).TotalMinutes, 1)
-            $line += "  up {0:N2} GB  new {1}  chg {2}  {3} min" -f ($s.summary.data_added_packed / 1GB), $s.summary.files_new, $s.summary.files_changed, $mins
-        }
-        Write-Host $line
+    foreach ($s in (Get-BackupSnapshotStats -Config $BackupConfig | Sort-Object Time | Select-Object -Last 8)) {
+        Write-Host ("Snap:     {0}  {1}  {2}  up {3:N2} GB  new {4}  chg {5}  {6} min" -f `
+            $s.ShortId, $s.Time.ToString("dd.MM. HH:mm"), $s.Chain, ($s.Packed / 1GB), $s.New, $s.Changed, $s.Minutes)
     }
 } catch { Write-Host "Snap:     Liste nicht abrufbar ($($_.Exception.Message))" }
 

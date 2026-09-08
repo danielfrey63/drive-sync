@@ -182,6 +182,17 @@ Theft, fire, dead SSD, or the [ransomware](#5-ransomware) scenario after the dec
 
 The upload watcher pushes local changes to the cloud within a minute, so by the time you notice, the encrypted files **are already in Google Drive**. The restic repository is the only copy that ransomware on this machine cannot rewrite in place — but it *can* delete it, because the machine holds the key and the repository password. Speed matters on exactly one step: freezing the repository.
 
+### How you find out
+
+Most likely the backup tells you before you notice anything else. After every run the tripwire compares the fresh snapshot against its own chain (see [README](README.md#ransomware-tripwire)); a wall of rewritten files, a wall of new ones, or a corpus that suddenly shrank raises `!! BACKUP ANOMALY - maintenance halted` instead of `Backup done`, and **latches**: `forget`, `prune` and `check` are already disabled by the time you read this, so the automation is not aging out your last clean snapshots while you work. Leave the latch alone until the incident is settled.
+
+If you suspect an attack but no alarm fired — it started after the last run, or it crept in below the thresholds — check by hand from a clean machine:
+
+```powershell
+.\backup\backup-status.ps1 -Audit          # the four rates per snapshot, whole history
+restic diff <earlier> <later> -o $o | Select-Object -First 40
+```
+
 ### Essential steps, in this order
 
 **A. Cut the machine off — first, before anything else.** Pull the network cable, switch Wi-Fi off, or pull the plug. Do not log in "to have a look", do not reboot into it, do not connect any external disk to it. Every minute online is another batch of files encrypted and synced up.

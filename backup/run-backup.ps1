@@ -8,26 +8,35 @@
 # git-with-openssh, which cannot talk to the Windows ssh-agent; the
 # Microsoft build in scoop/apps/openssh can, so restic is told to use it.
 #
-# Pipeline: backup (VSS snapshot when elevated) -> forget (retention) ->
-# prune (Sundays) -> check (Sundays, 2 % of the data read back).
+# Pipeline: backup (VSS snapshot when elevated) -> tripwire -> forget
+# (retention) -> prune (Sundays) -> check (Sundays, 2 % of the data read back).
 # Idempotent: every step is safe to repeat; an interrupted upload keeps its
 # packs and the next run continues from the repository index.
+#
+# The tripwire judges each fresh snapshot against its own chain and latches on
+# an alarm: backups keep running (a snapshot too many costs nothing), but
+# forget/prune/check stay disabled until "-ClearAnomaly" is run by hand, so no
+# automation ages out the last clean snapshots while nobody is watching.
 
 param(
     [switch]$NoVss,          # skip the VSS snapshot (implicit when not elevated)
     [switch]$DryRun,         # scan only, upload nothing
-    [switch]$SkipMaintenance # backup only, no forget/prune/check
+    [switch]$SkipMaintenance,# backup only, no forget/prune/check
+    [switch]$ClearAnomaly    # release the tripwire latch and exit
 )
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "..\config.ps1")
 . (Join-Path $PSScriptRoot "backup-config.ps1")
+. (Join-Path $PSScriptRoot "backup-metrics.ps1")
 
 $cfg = $BackupConfig
+$runStart = Get-Date
 $logDir = Join-Path $DriveSyncConfig.StateDir "logs"
 New-Item -ItemType Directory -Force $logDir | Out-Null
 $log = Join-Path $logDir ("backup-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
 $lock = Join-Path $DriveSyncConfig.StateDir "backup.lock"
+$latchFile = Join-Path $DriveSyncConfig.StateDir "backup-anomaly.json"
 
 function Log($msg) {
     $line = "{0} {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg
@@ -49,6 +58,19 @@ function Fail([string]$msg, [int]$code, [string]$title = "Backup FAILED") {
     Log $msg
     Notify $title "$msg`nLog: $log"
     exit $code
+}
+
+# releasing the latch is deliberately a separate, explicit invocation: it is
+# the one place where a human confirms the anomaly was understood
+if ($ClearAnomaly) {
+    $held = Get-BackupAnomalyLatch $latchFile
+    if ($held) {
+        Remove-Item $latchFile -ErrorAction SilentlyContinue
+        Log "anomaly latch released (was set $($held.time))"
+    } else {
+        Log "no anomaly latch set"
+    }
+    exit 0
 }
 
 # single instance: a stale lock (owner PID gone) is taken over
@@ -132,11 +154,60 @@ try {
     # restic's own summary lines (one "Added"/"processed" pair per source) make the toast body
     $summary = @($out | Where-Object { "$_" -match '^(Added to the repository|processed \d)' } | ForEach-Object { "$_".Trim() })
     if ($errors.Count -gt 0) { $summary += "$($errors.Count) unreadable file(s), see log" }
+
+    # tripwire: every snapshot this run created is judged against its own chain.
+    # A failure here must never fail the backup - the data is already on the
+    # box; only the verdict would be missing.
+    $latch = Get-BackupAnomalyLatch $latchFile
+    $notes = @()
     if (-not $DryRun) {
-        Notify $(if ($rc -eq 3) { "Backup done (unreadable files skipped)" } else { "Backup done" }) ($summary -join "`n")
+        $reasons = @()
+        try {
+            $all = Get-BackupSnapshotStats -Config $cfg
+            foreach ($source in $cfg.Sources) {
+                $fresh = @($all | Where-Object { $_.Path -eq $source -and $_.Time -ge $runStart } | Sort-Object Time)
+                foreach ($snap in $fresh) {
+                    $history = @($all | Where-Object { $_.Time -lt $snap.Time })
+                    $verdict = Test-BackupAnomaly -Config $cfg -Stat $snap -History $history
+                    $shrinkText = "n/a"
+                    if ($null -ne $snap.ShrinkRate) { $shrinkText = "{0:P3}" -f $snap.ShrinkRate }
+                    Log ("tripwire [{0}] {1}: changed {2:P3}, new {3:P3}, shrink {4}, ratio {5:N2} ({6:N0} files)" -f
+                        $source, $verdict.Level, $snap.ChangedRate, $snap.NewRate, $shrinkText, $snap.Ratio, $snap.Total)
+                    $reasons += $verdict.Reasons
+                    $notes   += $verdict.Notes
+                }
+            }
+        } catch { Log "tripwire skipped: $($_.Exception.Message)" }
+
+        foreach ($n in $notes) { Log "tripwire note: $n" }
+        if ($reasons.Count -gt 0) {
+            foreach ($r in $reasons) { Log "TRIPWIRE ALARM: $r" }
+            Set-BackupAnomalyLatch -Path $latchFile -Reasons $reasons
+            $latch = Get-BackupAnomalyLatch $latchFile
+        }
+    }
+
+    if (-not $DryRun) {
+        $title = "Backup done"
+        if ($rc -eq 3) { $title = "Backup done (unreadable files skipped)" }
+        $summary += $notes
+        if ($latch) {
+            $title = "!! BACKUP ANOMALY - maintenance halted"
+            $summary = @($latch.reasons) + @(
+                "Latched $($latch.time)."
+                "forget/prune/check stay off until reviewed."
+                "Release: run-backup.ps1 -ClearAnomaly"
+                "Log: $log"
+            )
+        }
+        Notify $title ($summary -join "`n")
     }
 
     if ($DryRun -or $SkipMaintenance) { exit 0 }
+    if ($latch) {
+        Log "maintenance skipped: anomaly latch set $($latch.time) - release with: run-backup.ps1 -ClearAnomaly"
+        exit 0
+    }
 
     # group-by host,paths: the C: chain and the D: chain age independently -
     # grouped by host alone, C and D snapshots of the same day would compete

@@ -24,11 +24,35 @@ C:\  +  D:\Meine Ablage
 
 | File | Purpose |
 | --- | --- |
-| `run-backup.ps1` | the pipeline: backup → forget → (Sundays) prune → check; lock, daily log, error summary. `-DryRun` scans without uploading, `-NoVss` skips the snapshot, `-SkipMaintenance` stops after the backup |
-| `backup-config.ps1` | repository, password file, retention, schedule, pinned ssh command. Machine-specific overrides go into `backup-config.local.ps1` (gitignored) |
+| `run-backup.ps1` | the pipeline: backup → tripwire → forget → (Sundays) prune → check; lock, daily log, error summary. `-DryRun` scans without uploading, `-NoVss` skips the snapshot, `-SkipMaintenance` stops after the backup, `-ClearAnomaly` releases the tripwire latch |
+| `backup-config.ps1` | repository, password file, retention, schedule, pinned ssh command, tripwire thresholds. Machine-specific overrides go into `backup-config.local.ps1` (gitignored) |
+| `backup-metrics.ps1` | shared: turns the summaries restic stores inside each snapshot into per-chain rates, and judges a run against the thresholds |
 | `restic-excludes.txt` | what stays out (see *Decisions*) |
 | `install-backup-task.ps1` | registers the elevated scheduled task (idempotent). Starts pwsh windowless through `ai-toolbox/tools/run-hidden` (sibling checkout, `-ToolboxPath` overrides) — `-WindowStyle Hidden` alone flashes a console window on every run |
-| `backup-status.ps1` | task/process/log status plus repository size and upload rate measured on the box (restic logs no progress when not on a terminal) |
+| `backup-status.ps1` | task/process/log status, latch state, repository size and upload rate measured on the box (restic logs no progress when not on a terminal). `-Audit` replays the tripwire over the whole snapshot history |
+
+## Ransomware tripwire
+
+A backup that faithfully mirrors an encryption attack is worth very little. After every run the pipeline judges each fresh snapshot against its own chain, using the summary restic stores inside the snapshot — no extra bookkeeping. Four independent legs, each of which alone raises the alarm:
+
+| Leg | Catches | `C:\` | `D:\Meine Ablage` |
+| --- | --- | --- | --- |
+| changed / files | in-place encryption | 3 % | 1 % |
+| new / files | rename encryption (`foo.docx` → `foo.docx.locked`) | 15 % | 10 % |
+| shrink vs. previous snapshot | mass deletion, and the other half of rename encryption | 10 % | 2 % |
+| changed summed over 24 h | slow burn that stays under the per-run limits | 8 % | 3 % |
+
+**Changed and new are judged separately, and that separation is the design.** Ransomware *replaces* existing files; a bulk import *adds* files. A single combined rate throws the distinction away — measured, it turns a 60'000-photo import into a false alarm while an in-place encryption of 300'000 files lands on the same side of the threshold. Upload volume and compression ratio appear as hints in the message but never trigger on their own: the entirely legitimate first `D:` snapshot had a compression ratio of 1.05, exactly the value a naive "incompressible means encrypted" rule fires on.
+
+Thresholds are static rather than a rolling baseline, because a rolling baseline can be poisoned — malware ramping up slowly over twenty snapshots trains its own normal. They are shares, not counts, because the two chains differ by a factor of ~500 in file count. The values above sit 3–300× above everything measured in the first 36 snapshots.
+
+**On alarm the tripwire latches.** Backups keep running — a snapshot too many costs nothing — but `forget`, `prune` and `check` stay disabled, and the toast says so on every subsequent run. Without the latch the next run six hours later would see a perfectly normal rate (the files are encrypted by then, so they count as *unmodified*) and would resume aging out the last clean snapshots while nobody is watching. Release it deliberately, after you know what happened:
+
+```powershell
+.\backup\run-backup.ps1 -ClearAnomaly
+```
+
+After changing a threshold, run `.\backup\backup-status.ps1 -Audit`. It replays the detector over every snapshot in the repository and prints the four rates plus a verdict per snapshot. A calibrated detector is silent on the entire history — if it is not, the thresholds are wrong, and you find out before arming it rather than at 03:00 on a Sunday.
 
 Logs: `%LOCALAPPDATA%\drive-sync\logs\backup-<yyyyMMdd>.log`. restic cache: `%LOCALAPPDATA%\drive-sync\restic-cache`. Each run ends with a Windows toast (sender "DriveSync Backup", via `ai-toolbox/tools/notify`): restic's "Added to the repository" / "processed" lines on success, the failing step on error; a missing toolbox checkout only silences the toasts.
 
@@ -123,6 +147,8 @@ $o = "sftp.command=C:/Users/<you>/scoop/apps/openssh/current/ssh.exe storagebox 
 | find a file across snapshots | `restic find -o $o "*.kdbx"` |
 | space used / dedup ratio | `restic stats -o $o --mode raw-data` |
 | manual run now | `.\run-backup.ps1` (elevated for VSS) |
+| tripwire state and thresholds | `.\backup-status.ps1` / `.\backup-status.ps1 -Audit` |
+| release the tripwire latch | `.\run-backup.ps1 -ClearAnomaly` |
 | tail the log | `Get-Content "$env:LOCALAPPDATA\drive-sync\logs\backup-$(Get-Date -Format yyyyMMdd).log" -Tail 20` |
 
 Paths inside the repository are written `/C/Users/...` and `/D/Meine Ablage/...` — drive letters become the first path component, backslashes become slashes. Restoring a full snapshot recreates that layout under `--target` (`D:\restore\C\Users\...`); the one harmless error you will see is a failed timestamp on the read-only `Users` directory. `restic mount` does not exist on Windows (no FUSE) — use `ls`, `find`, `dump` and `restore --include` instead.
@@ -136,6 +162,7 @@ Step-by-step recovery scenarios — lost file, dead disk, new machine, ransomwar
 - **`.git`, `.claude` and `.env` stay in**, unlike in the sync filters: unpushed commits are exactly what a backup is for, and the repository is encrypted and only readable locally. Package caches, build outputs, `node_modules`, `.venv`, `.metadata`, `CVS`, `.svn` stay out.
 - **Docker/WSL images, browser caches, `Temp`, IDE caches** stay out — volatile, locked, reproducible.
 - **iCloud Photos** stay out: 34'075 dehydrated placeholders whose content lives at Apple only (the provider is not running on this machine). Excluding them keeps the log readable; the error summary at the end of each log lists whatever else could not be read, grouped by cause.
+- **No Hetzner API token on this machine.** An automatic Storage Box snapshot on alarm was considered and rejected: it needs a write-capable token on the very machine that is compromised in that scenario, and Hetzner tokens are project-wide, so the same token could delete snapshots. The daily auto-snapshots (20 retained, ~3 weeks) cover the same window without that attack surface; the alarm toast tells you to take a manual one.
 - **Exclude-file syntax:** a literal `$` must be written `$$` (restic expands environment variables), comments only on their own line, `*` does not cross a path separator, `**` does.
 
 ## Why these tools
@@ -154,5 +181,6 @@ Step-by-step recovery scenarios — lost file, dead disk, new machine, ransomwar
 - **`Unable to negotiate ... no matching key exchange method`** — you are on port 22, or the box was moved to a host without `sntrup761`. Check with `ssh -vv storagebox 2>&1 | Select-String "kex: algorithm"`.
 - **`Permission denied ()` on port 23** although the key is right — SSH-Support is disabled in the Console.
 - **`backup finished with unreadable files (rc=3)`** — look at the error summary at the end of the log. *access denied* and *locked file* mean the run was not elevated; *cloud placeholder* means dehydrated OneDrive/iCloud files.
+- **`!! BACKUP ANOMALY - maintenance halted`** — the tripwire fired; the toast and the log name the leg and the numbers. If you know the cause (a large import, a bulk delete, a reorg), release with `.\run-backup.ps1 -ClearAnomaly`. If you do not, treat it as [scenario 5](RESTORE.md#5-ransomware) and cut the machine off the network first. Backups continue either way; only `forget`/`prune`/`check` are paused.
 - **Repository locked after a crash** — `restic unlock -o $o` (only when no other restic is running; check the task).
 - **`another backup is running`** in the log although none is — stale lock with a dead PID is taken over automatically; if the PID is alive, wait.
