@@ -109,7 +109,12 @@ $sw = [Diagnostics.Stopwatch]::StartNew()
 $rep = @(Write-SpliceReport $localPath $DriveSyncConfig.Remote $tmp)
 $sw.Stop()
 $leftover = @(Read-DroppedDeletes $tmp "path1").Count
+# the nightly task runs hidden: the file is the only place the numbers survive
+$logged = @(Get-Content (Join-Path $tmp "splice-report.log") -ErrorAction SilentlyContinue)
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 $ok3 = $rep.Count -eq 1 -and $rep[0].Ready.Count -eq 1 -and $leftover -eq 0
 Write-Host "$(if ($ok3) { 'PASS' } else { 'FAIL' }) - ein Seitenbericht, 1 zu spleissen, Journal danach geleert"
+$ok6 = $logged.Count -ge 1 -and ($logged[0] -match 'splice report path1: 4 journalled')
+Write-Host "Bericht-Log: $($logged.Count) Zeile(n)"
+Write-Host "$(if ($ok6) { 'PASS' } else { 'FAIL' }) - Bericht steht in splice-report.log"
 Write-Host ("Laufzeit des Berichts ueber beide Listings: {0:n1} s" -f $sw.Elapsed.TotalSeconds)

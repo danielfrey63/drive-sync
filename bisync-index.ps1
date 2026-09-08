@@ -111,9 +111,19 @@ function Measure-SpliceCandidates([string]$localRoot, $listings, [string]$side, 
 # entries, so a caller can assert on them.
 function Write-SpliceReport([string]$localRoot, [string]$remote, [string]$stateDir) {
     $out = @()
+    # The nightly task runs sync-drive.ps1 with -WindowStyle Hidden and no
+    # redirection, so Write-Host alone leaves no trace of the very nights this
+    # report exists to observe. Keep a file next to the state, and echo for the
+    # manual run and the test.
+    $reportLog = Join-Path $stateDir "splice-report.log"
+    $say = {
+        param($msg)
+        Write-Host $msg
+        try { Add-Content $reportLog "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $msg" -ErrorAction SilentlyContinue } catch { }
+    }
     $listings = Get-BisyncListings $localRoot $remote
     if (-not $listings) {
-        Write-Host "splice report: no baseline listings found - skipped"
+        & $say "splice report: no baseline listings found - skipped"
         return $out
     }
     foreach ($side in @("path1", "path2")) {
@@ -126,12 +136,12 @@ function Write-SpliceReport([string]$localRoot, [string]$remote, [string]$stateD
         $m = Measure-SpliceCandidates $localRoot $listings $side $journal
         # the concatenation needs its own parentheses: -f binds tighter than +,
         # so without them only the second literal would be formatted
-        Write-Host ((
+        & $say ((
                 "splice report {0}: {1} journalled - {2} would be spliced, " +
                 "{3} already in the baseline, {4} back on disk, {5} unsafe name"
             ) -f $side, $m.Total, $m.Ready.Count, $m.InBaseline, $m.Recreated, $m.UnsafeName.Count)
-        foreach ($p in @($m.Ready | Select-Object -First 5)) { Write-Host "    would splice: $p" }
-        foreach ($p in @($m.UnsafeName | Select-Object -First 3)) { Write-Host "    unsafe name: $p" }
+        foreach ($p in @($m.Ready | Select-Object -First 5)) { & $say "    would splice: $p" }
+        foreach ($p in @($m.UnsafeName | Select-Object -First 3)) { & $say "    unsafe name: $p" }
         $out += $m
     }
     return $out
