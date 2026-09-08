@@ -55,7 +55,9 @@ try {
     # numbers are still being judged. A -Resync rebuilds the baseline from
     # scratch and makes the whole question moot.
     if (-not $Resync -and $DriveSyncConfig.JournalDroppedDeletes) {
-        Write-SpliceReport $localPath $remote $stateDir | Out-Null
+        # -Peek under -DryRun: a trial run must not consume the entries the next
+        # real run needs - it would silently undo the very thing being tested
+        Write-SpliceReport $localPath $remote $stateDir -Peek:$DryRun | Out-Null
     }
 
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"

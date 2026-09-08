@@ -101,9 +101,17 @@ $ok5 = $recovered.Count -eq 2 -and $recovered[0] -eq 'next.txt' -and $recovered[
 Write-Host "`nAbgestuerzter Konsument: $($recovered -join ', ')"
 Write-Host "$(if ($ok5) { 'PASS' } else { 'FAIL' }) - erwartet next.txt + orphan.txt"
 
-# the report exactly as sync-drive.ps1 runs it, against a scratch journal
+# a dry run must leave the journal alone, twice in a row
 Clear-DroppedDeletes $tmp "path1" -All
 Add-DroppedDeletes $tmp "path1" @($cases.Values)
+Write-Host "`nTrockenlauf (-Peek), zweimal:"
+$p1 = @(Write-SpliceReport $localPath $DriveSyncConfig.Remote $tmp -Peek)
+$p2 = @(Write-SpliceReport $localPath $DriveSyncConfig.Remote $tmp -Peek)
+$stillThere = @(Read-DroppedDeletes $tmp "path1").Count
+$ok7 = $p1.Count -eq 1 -and $p2.Count -eq 1 -and $p1[0].Total -eq $p2[0].Total -and $stillThere -eq $cases.Count
+Write-Host "$(if ($ok7) { 'PASS' } else { 'FAIL' }) - beide Male $($cases.Count) Eintraege, danach noch $stillThere im Journal"
+
+# the report exactly as sync-drive.ps1 runs it, against a scratch journal
 Write-Host "`nBericht (derselbe Aufruf wie im Wrapper):"
 $sw = [Diagnostics.Stopwatch]::StartNew()
 $rep = @(Write-SpliceReport $localPath $DriveSyncConfig.Remote $tmp)
@@ -114,7 +122,10 @@ $logged = @(Get-Content (Join-Path $tmp "splice-report.log") -ErrorAction Silent
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 $ok3 = $rep.Count -eq 1 -and $rep[0].Ready.Count -eq 1 -and $leftover -eq 0
 Write-Host "$(if ($ok3) { 'PASS' } else { 'FAIL' }) - ein Seitenbericht, 1 zu spleissen, Journal danach geleert"
-$ok6 = $logged.Count -ge 1 -and ($logged[0] -match 'splice report path1: 4 journalled')
-Write-Host "Bericht-Log: $($logged.Count) Zeile(n)"
-Write-Host "$(if ($ok6) { 'PASS' } else { 'FAIL' }) - Bericht steht in splice-report.log"
+# by content, not by position: the dry runs above log first
+$real = @($logged | Where-Object { $_ -match 'splice report path1: 4 journalled' })
+$dry = @($logged | Where-Object { $_ -match 'dry run, journal kept' })
+$ok6 = $real.Count -eq 1 -and $dry.Count -eq 2
+Write-Host "Bericht-Log: $($logged.Count) Zeile(n), davon $($real.Count) echt / $($dry.Count) trocken"
+Write-Host "$(if ($ok6) { 'PASS' } else { 'FAIL' }) - Bericht steht in splice-report.log, Trockenlauf als solcher markiert"
 Write-Host ("Laufzeit des Berichts ueber beide Listings: {0:n1} s" -f $sw.Elapsed.TotalSeconds)

@@ -109,7 +109,9 @@ function Measure-SpliceCandidates([string]$localRoot, $listings, [string]$side, 
 # Report what a splice would have covered, and consume the journals. Reads only;
 # the baselines are not touched. Returns the measurements, one per side that had
 # entries, so a caller can assert on them.
-function Write-SpliceReport([string]$localRoot, [string]$remote, [string]$stateDir) {
+# -Peek reports without consuming: a dry run must not eat the entries the next
+# real run needs. It is the caller's -DryRun, passed through.
+function Write-SpliceReport([string]$localRoot, [string]$remote, [string]$stateDir, [switch]$Peek) {
     $out = @()
     # The nightly task runs sync-drive.ps1 with -WindowStyle Hidden and no
     # redirection, so Write-Host alone leaves no trace of the very nights this
@@ -127,19 +129,22 @@ function Write-SpliceReport([string]$localRoot, [string]$remote, [string]$stateD
         return $out
     }
     foreach ($side in @("path1", "path2")) {
-        $journal = @(Read-DroppedDeletes $stateDir $side -Claim)
+        # peeking reads the journal AND a claim a dead consumer left behind,
+        # and moves neither
+        $journal = @(Read-DroppedDeletes $stateDir $side -Claim:(-not $Peek))
         # consumed right away: the batch is in memory and the report changes
         # nothing, so a retry could not salvage anything. The splice will move
         # this to after a successful write, where a crash IS worth retrying.
-        Clear-DroppedDeletes $stateDir $side
+        if (-not $Peek) { Clear-DroppedDeletes $stateDir $side }
         if ($journal.Count -eq 0) { continue }
         $m = Measure-SpliceCandidates $localRoot $listings $side $journal
         # the concatenation needs its own parentheses: -f binds tighter than +,
         # so without them only the second literal would be formatted
         & $say ((
-                "splice report {0}: {1} journalled - {2} would be spliced, " +
+                "splice report {0}{6}: {1} journalled - {2} would be spliced, " +
                 "{3} already in the baseline, {4} back on disk, {5} unsafe name"
-            ) -f $side, $m.Total, $m.Ready.Count, $m.InBaseline, $m.Recreated, $m.UnsafeName.Count)
+            ) -f $side, $m.Total, $m.Ready.Count, $m.InBaseline, $m.Recreated, $m.UnsafeName.Count,
+            $(if ($Peek) { " (dry run, journal kept)" } else { "" }))
         foreach ($p in @($m.Ready | Select-Object -First 5)) { & $say "    would splice: $p" }
         foreach ($p in @($m.UnsafeName | Select-Object -First 3)) { & $say "    unsafe name: $p" }
         $out += $m
