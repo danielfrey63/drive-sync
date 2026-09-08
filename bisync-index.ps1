@@ -53,9 +53,13 @@ function Test-SpliceSafeName([string]$rel) {
 
 # Which of $candidates does a listing already know about? Streams the file once;
 # Get-Content would take minutes on a 212 MB listing.
+# The leading comma on both returns is load-bearing: PowerShell unrolls a
+# collection on return, which turns no matches into $null (and the caller's
+# .Contains() into a null-reference error) and a single match into a String,
+# whose .Contains() compares substrings instead of paths.
 function Get-ListedPaths([string]$listing, [System.Collections.Generic.HashSet[string]]$wanted) {
     $hit = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-    if ($wanted.Count -eq 0) { return $hit }
+    if ($wanted.Count -eq 0) { return , $hit }
     foreach ($line in [System.IO.File]::ReadLines($listing)) {
         if ($line.Length -eq 0 -or $line[0] -eq '#') { continue }
         $a = $line.IndexOf('"')
@@ -65,7 +69,7 @@ function Get-ListedPaths([string]$listing, [System.Collections.Generic.HashSet[s
         $p = $line.Substring($a + 1, $b - $a - 1)
         if ($wanted.Contains($p)) { [void]$hit.Add($p) }
     }
-    return $hit
+    return , $hit
 }
 
 # Classify journalled paths against the baselines and the two file systems.
