@@ -18,7 +18,7 @@
 # is the only consumer. Dot-source this file, then:
 #   . (Join-Path $PSScriptRoot "delete-journal.ps1")
 #   Add-DroppedDeletes $stateDir "path1" $paths
-#   $paths = Read-DroppedDeletes $stateDir "path1" -Claim
+#   $entries = Read-DroppedDeletes $stateDir "path1" -Claim   # .Rel / .Time
 #   Clear-DroppedDeletes $stateDir "path1"
 #
 # One writer per file (the local watcher owns path1, the cloud watcher path2), so
@@ -55,6 +55,10 @@ function Add-DroppedDeletes([string]$stateDir, [string]$side, [string[]]$rels) {
     catch { }
 }
 
+# Returns one object per path: Rel (with "/" separators) and Time (unix seconds
+# of the delete). The caller needs both - the time is the only bound it has for
+# "has the surviving copy been touched since we deleted ours".
+#
 # -Claim renames the journal aside and reads the renamed copy. The rename is
 # atomic on NTFS, so a watcher appending at that very moment writes into a fresh
 # journal and its entries survive; plain read-then-clear would drop them.
@@ -79,16 +83,21 @@ function Read-DroppedDeletes([string]$stateDir, [string]$side, [switch]$Claim) {
         }
         $sources = if ($Claim) { @($claimFile) } else { @($file, $claimFile) }
         $cut = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - ($script:JournalMaxAgeDays * 86400)
-        $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        # EARLIEST timestamp wins on a duplicate: the time is what a later step
+        # measures a foreign change against, and the first delete attempt is the
+        # conservative bound - a change after it must be noticed, not swallowed
+        $seen = [System.Collections.Generic.Dictionary[string, long]]::new([System.StringComparer]::Ordinal)
         foreach ($src in $sources) {
             if (-not (Test-Path $src)) { continue }
             foreach ($line in Get-Content $src -ErrorAction SilentlyContinue) {
                 if ($line -notmatch '^(\d+)\t(.+)$') { continue }
-                if ([long]$Matches[1] -le $cut) { continue }
-                [void]$seen.Add($Matches[2])
+                $t = [long]$Matches[1]
+                if ($t -le $cut) { continue }
+                $rel = $Matches[2]
+                if (-not $seen.ContainsKey($rel) -or $t -lt $seen[$rel]) { $seen[$rel] = $t }
             }
         }
-        return @($seen)
+        return @($seen.Keys | ForEach-Object { [pscustomobject]@{ Rel = $_; Time = $seen[$_] } })
     }
     # must not abort the caller (the watcher would die, the bisync would skip its
     # run), but must not be invisible either: a silent catch here hid a variable

@@ -16,8 +16,10 @@
 # only, and its baseline says it never existed, so "new on path2" is the only
 # reading available. With the two spliced lines it reads "deleted on path1" and
 # propagates the deletion. That difference is the whole point of stage 3.
+# C changes the surviving copy after the delete: the lookup must refuse it,
+# because a line built from the new values would erase that change silently.
 #
-#   pwsh -File test-splice-e2e.ps1          run both scenarios
+#   pwsh -File test-splice-e2e.ps1          run all three scenarios
 #   pwsh -File test-splice-e2e.ps1 -Keep    leave the scratch dirs for a look
 
 param([switch]$Keep)
@@ -66,7 +68,7 @@ function Add-ListingEntry([string]$listing, [string]$rel, [long]$size, [datetime
     $sw.Dispose()
 }
 
-function Invoke-Scenario([string]$label, [bool]$splice) {
+function Invoke-Scenario([string]$label, [bool]$splice, [bool]$touchP2 = $false) {
     $p1 = Join-Path $root "path1"
     $p2 = Join-Path $root "path2"
     $work = Join-Path $root "work"
@@ -98,16 +100,30 @@ function Invoke-Scenario([string]$label, [bool]$splice) {
     Remove-Item $abs1
     Add-DroppedDeletes $state "path1" @($testFile)
 
+    # 3b) another device changes the surviving copy AFTER our delete. The
+    #     journal time is the only bound we have for that, and the lookup
+    #     allows a second of slack for two unsynchronised clocks.
+    if ($touchP2) {
+        Start-Sleep -Milliseconds 2100
+        Add-Content (Join-Path $p2 $testFile) " changed on another device" -NoNewline
+    }
+
     # 4) the report - peeking, so the journal survives for the splice below
-    $rep = @(Write-SpliceReport $p1 $p2 $state -Peek)
+    $rep = @(Write-SpliceReport $p1 $p2 $state $rclone -Peek)
     $ready = if ($rep.Count -gt 0) { @($rep[0].Ready) } else { @() }
+    $usable = if ($rep.Count -gt 0) { $rep[0].Splice } else { @{} }
+    $conflict = if ($rep.Count -gt 0) { $rep[0].Conflict } else { 0 }
 
     # 5) the splice, or not
     if ($splice) {
         $listings = Get-BisyncListings $p1 $p2
         if (-not $listings) { throw "no listings in $work" }
+        # size and modtime come from the report's lookup, not from $info: the
+        # production splice will only ever have the surviving copy to ask
+        $md = $usable[$testFile]
+        if (-not $md) { throw "no usable metadata for $testFile" }
         foreach ($l in @($listings.Path1, $listings.Path2)) {
-            Add-ListingEntry $l $testFile $info.Length $info.LastWriteTimeUtc
+            Add-ListingEntry $l $testFile $md.Size $md.ModTime
         }
     }
 
@@ -121,6 +137,8 @@ function Invoke-Scenario([string]$label, [bool]$splice) {
         Label      = $label
         Exit       = $exit
         Ready      = $ready
+        Usable     = $usable.Count
+        Conflict   = $conflict
         BackOnP1   = Test-Path (Join-Path $p1 $testFile)
         StillOnP2  = Test-Path (Join-Path $p2 $testFile)
         Log        = $log
@@ -138,7 +156,7 @@ Write-Host "   nach dem bisync: auf path1 wieder da = $($a.BackOnP1), auf path2 
 # @() at the point of use: a single-element collection read back from a
 # property collapses to the scalar, and "neu.txt"[0] is the letter n
 $readyA = @($a.Ready)
-$okA = $a.Exit -eq 0 -and $readyA.Count -eq 1 -and $readyA[0] -eq $testFile -and $a.BackOnP1 -and $a.StillOnP2
+$okA = $a.Exit -eq 0 -and $readyA.Count -eq 1 -and $readyA[0] -eq $testFile -and $a.Usable -eq 1 -and $a.BackOnP1 -and $a.StillOnP2
 Write-Host "$(if ($okA) { 'PASS' } else { 'FAIL' }) - der Vorfall vom 05.09. reproduziert: die Loeschung kippt zur Wiederherstellung`n"
 
 # --- B: with the two spliced lines ------------------------------------------
@@ -148,9 +166,19 @@ Write-Host "   nach dem bisync: auf path1 wieder da = $($b.BackOnP1), auf path2 
 $okB = $b.Exit -eq 0 -and -not $b.BackOnP1 -and -not $b.StillOnP2
 Write-Host "$(if ($okB) { 'PASS' } else { 'FAIL' }) - die Loeschung wird propagiert, nichts kommt zurueck`n"
 
+# --- C: the surviving copy was changed elsewhere after our delete ------------
+# The whole reason the line must describe the file AS UPLOADED. Built from the
+# current values instead, it would tell bisync "unchanged on path2" and the
+# foreign change would be deleted without a trace.
+$c = Invoke-Scenario "Fremdaenderung" $false $true
+Write-Host "C) Fremdaenderung an der ueberlebenden Kopie"
+Write-Host "   brauchbar = $($c.Usable), als Konflikt erkannt = $($c.Conflict), auf path2 noch da = $($c.StillOnP2)"
+$okC = $c.Usable -eq 0 -and $c.Conflict -eq 1 -and $c.StillOnP2
+Write-Host "$(if ($okC) { 'PASS' } else { 'FAIL' }) - nichts zu spleissen, die fremde Aenderung bleibt`n"
+
 if ($Keep) { Write-Host "scratch behalten: $root" }
 else { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
 
-if ($okA -and $okB) { Write-Host "ALLES PASS"; exit 0 }
+if ($okA -and $okB -and $okC) { Write-Host "ALLES PASS"; exit 0 }
 Write-Host "FEHLGESCHLAGEN"
 exit 1

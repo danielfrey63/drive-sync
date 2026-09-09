@@ -70,10 +70,10 @@ New-Item -ItemType Directory -Force $tmp | Out-Null
 Clear-DroppedDeletes $tmp "path1" -All
 Add-DroppedDeletes $tmp "path1" @("a\b\c.txt", "d/e.txt", "a\b\c.txt")
 $rt = @(Read-DroppedDeletes $tmp "path1" -Claim)
-Write-Host "`nJournal-Roundtrip: $($rt.Count) Eintraege - $($rt -join ', ')"
+Write-Host "`nJournal-Roundtrip: $($rt.Count) Eintraege - $(@($rt.Rel) -join ', ')"
 Clear-DroppedDeletes $tmp "path1"
 $after = @(Read-DroppedDeletes $tmp "path1").Count
-$ok2 = $rt.Count -eq 2 -and $rt -contains 'a/b/c.txt' -and $after -eq 0
+$ok2 = $rt.Count -eq 2 -and @($rt.Rel) -contains 'a/b/c.txt' -and $after -eq 0
 Write-Host "$(if ($ok2) { 'PASS' } else { 'FAIL' }) - erwartet 2 Eintraege, Backslashes normalisiert, danach leer"
 
 # the race the claim exists for: a watcher appends while a batch is being
@@ -84,9 +84,9 @@ $claimed = @(Read-DroppedDeletes $tmp "path1" -Claim)
 Add-DroppedDeletes $tmp "path1" @("late.txt")           # the watcher, mid-flush
 Clear-DroppedDeletes $tmp "path1"
 $survived = @(Read-DroppedDeletes $tmp "path1")
-$ok4 = $claimed.Count -eq 1 -and $claimed[0] -eq 'early.txt' `
-    -and $survived.Count -eq 1 -and $survived[0] -eq 'late.txt'
-Write-Host "`nNebenlaeufiger Anhang: geclaimt=$($claimed -join ',') ueberlebt=$($survived -join ',')"
+$ok4 = $claimed.Count -eq 1 -and @($claimed.Rel)[0] -eq 'early.txt' `
+    -and $survived.Count -eq 1 -and @($survived.Rel)[0] -eq 'late.txt'
+Write-Host "`nNebenlaeufiger Anhang: geclaimt=$(@($claimed.Rel) -join ',') ueberlebt=$(@($survived.Rel) -join ',')"
 Write-Host "$(if ($ok4) { 'PASS' } else { 'FAIL' }) - erwartet early.txt geclaimt, late.txt ueberlebt"
 
 # consumer died between claim and clear: the batch must not be lost, and the
@@ -95,7 +95,7 @@ Clear-DroppedDeletes $tmp "path1" -All
 Add-DroppedDeletes $tmp "path1" @("orphan.txt")
 [void](Read-DroppedDeletes $tmp "path1" -Claim)         # ... and then the process dies
 Add-DroppedDeletes $tmp "path1" @("next.txt")
-$recovered = @(Read-DroppedDeletes $tmp "path1" -Claim | Sort-Object)
+$recovered = @(Read-DroppedDeletes $tmp "path1" -Claim | ForEach-Object { $_.Rel } | Sort-Object)
 Clear-DroppedDeletes $tmp "path1" -All
 $ok5 = $recovered.Count -eq 2 -and $recovered[0] -eq 'next.txt' -and $recovered[1] -eq 'orphan.txt'
 Write-Host "`nAbgestuerzter Konsument: $($recovered -join ', ')"
@@ -120,8 +120,12 @@ $leftover = @(Read-DroppedDeletes $tmp "path1").Count
 # the nightly task runs hidden: the file is the only place the numbers survive
 $logged = @(Get-Content (Join-Path $tmp "splice-report.log") -ErrorAction SilentlyContinue)
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
-$ok3 = $rep.Count -eq 1 -and $rep[0].Ready.Count -eq 1 -and $leftover -eq 0
-Write-Host "$(if ($ok3) { 'PASS' } else { 'FAIL' }) - ein Seitenbericht, 1 zu spleissen, Journal danach geleert"
+# the one ready candidate exists nowhere, so the metadata lookup must come back
+# "gone" and nothing may end up in the splice set
+$ok3 = $rep.Count -eq 1 -and $rep[0].Ready.Count -eq 1 -and $leftover -eq 0 `
+    -and $rep[0].Gone -eq 1 -and $rep[0].Splice.Count -eq 0
+Write-Host "Metadaten: $($rep[0].Splice.Count) brauchbar, $($rep[0].Gone) nirgends mehr, $($rep[0].Conflict) veraendert"
+Write-Host "$(if ($ok3) { 'PASS' } else { 'FAIL' }) - ein Seitenbericht, 1 Kandidat, nirgends auffindbar, Journal geleert"
 # by content, not by position: the dry runs above log first
 $real = @($logged | Where-Object { $_ -match 'splice report path1: 4 journalled' })
 $dry = @($logged | Where-Object { $_ -match 'dry run, journal kept' })

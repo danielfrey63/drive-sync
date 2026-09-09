@@ -110,12 +110,55 @@ function Measure-SpliceCandidates([string]$localRoot, $listings, [string]$side, 
     }
 }
 
+# Size and modtime for a spliced line, taken from the side that still has the
+# file. The upload ledger cannot serve: it carries only timestamp and path, and
+# only for an hour.
+#
+# Why not simply the current metadata of the surviving copy: if another device
+# changed it after our upload, a line built from today's values would tell bisync
+# "unchanged on the other side" and the change would be deleted without a trace.
+# The line has to describe the file AS UPLOADED, so a foreign change surfaces as
+# a conflict. The journal time is the bound we have for that - a surviving copy
+# modified after we deleted ours is not ours any more.
+#
+# $side is the side the delete happened on, so the surviving copy is the other:
+#   path1 - deleted locally, the cloud still has it -> ask the remote
+#   path2 - deleted in the cloud, the mirror still has it -> ask the disk
+# States: ok (splice it) | gone (nothing to do) | conflict (leave it to bisync)
+function Get-SpliceMetadata([string]$rcloneExe, [string]$localRoot, [string]$remote,
+    [string]$side, [string]$rel, [long]$journalTime) {
+    $none = { param($s) [pscustomobject]@{ State = $s; Size = 0; ModTime = [datetime]::MinValue } }
+    $size = $null
+    $mtime = $null
+    if ($side -eq "path1") {
+        # "gdrive:" needs no separator, a local path (the end-to-end test syncs
+        # two directories) does - without it the two names simply run together
+        $sep = if ($remote -match '[:/\\]$') { "" } else { "/" }
+        $stat = & $rcloneExe lsjson "$remote$sep$rel" --stat @($DriveSyncConfig.Pacer) 2>$null | ConvertFrom-Json
+        if (-not $stat -or $stat.IsDir) { return & $none "gone" }
+        $size = [long]$stat.Size
+        $mtime = ([datetime]$stat.ModTime).ToUniversalTime()
+    }
+    else {
+        $fi = Get-Item -LiteralPath (Join-Path $localRoot ($rel -replace '/', '\')) -Force -ErrorAction SilentlyContinue
+        if (-not $fi -or $fi.PSIsContainer) { return & $none "gone" }
+        $size = $fi.Length
+        $mtime = $fi.LastWriteTimeUtc
+    }
+    # a second of slack: the delete is journalled after the file is gone, and
+    # two clocks (local, Drive) are never exactly aligned
+    $cut = [DateTimeOffset]::FromUnixTimeSeconds($journalTime + 1).UtcDateTime
+    if ($mtime -gt $cut) { return & $none "conflict" }
+    [pscustomobject]@{ State = "ok"; Size = $size; ModTime = $mtime }
+}
+
 # Report what a splice would have covered, and consume the journals. Reads only;
 # the baselines are not touched. Returns the measurements, one per side that had
 # entries, so a caller can assert on them.
 # -Peek reports without consuming: a dry run must not eat the entries the next
 # real run needs. It is the caller's -DryRun, passed through.
-function Write-SpliceReport([string]$localRoot, [string]$remote, [string]$stateDir, [switch]$Peek) {
+function Write-SpliceReport([string]$localRoot, [string]$remote, [string]$stateDir,
+    [string]$rcloneExe = "rclone", [switch]$Peek) {
     $out = @()
     # The nightly task runs sync-drive.ps1 with -WindowStyle Hidden and no
     # redirection, so Write-Host alone leaves no trace of the very nights this
@@ -135,13 +178,38 @@ function Write-SpliceReport([string]$localRoot, [string]$remote, [string]$stateD
     foreach ($side in @("path1", "path2")) {
         # peeking reads the journal AND a claim a dead consumer left behind,
         # and moves neither
-        $journal = @(Read-DroppedDeletes $stateDir $side -Claim:(-not $Peek))
+        $entries = @(Read-DroppedDeletes $stateDir $side -Claim:(-not $Peek))
         # consumed right away: the batch is in memory and the report changes
         # nothing, so a retry could not salvage anything. The splice will move
         # this to after a successful write, where a crash IS worth retrying.
         if (-not $Peek) { Clear-DroppedDeletes $stateDir $side }
-        if ($journal.Count -eq 0) { continue }
-        $m = Measure-SpliceCandidates $localRoot $listings $side $journal
+        if ($entries.Count -eq 0) { continue }
+        $m = Measure-SpliceCandidates $localRoot $listings $side @($entries.Rel)
+
+        # Only now, and only for the candidates that survived the classification:
+        # every lookup is a metadata call, and the cap is the ceiling on both the
+        # cost and the size of a splice gone wrong.
+        $maxSplice = if ($DriveSyncConfig.MaxSpliceEntries) { [int]$DriveSyncConfig.MaxSpliceEntries } else { 200 }
+        $times = @{}
+        foreach ($e in $entries) { $times[$e.Rel] = $e.Time }
+        $ready = @($m.Ready)
+        $capped = $ready.Count -gt $maxSplice
+        if ($capped) { $ready = @($ready | Select-Object -First $maxSplice) }
+        $meta = @{}
+        $gone = 0
+        $conflict = 0
+        foreach ($rel in $ready) {
+            $md = Get-SpliceMetadata $rcloneExe $localRoot $remote $side $rel $times[$rel]
+            switch ($md.State) {
+                "ok" { $meta[$rel] = $md }
+                "gone" { $gone++ }
+                default { $conflict++ }
+            }
+        }
+        $m | Add-Member -NotePropertyName Splice -NotePropertyValue $meta
+        $m | Add-Member -NotePropertyName Gone -NotePropertyValue $gone
+        $m | Add-Member -NotePropertyName Conflict -NotePropertyValue $conflict
+        $m | Add-Member -NotePropertyName Capped -NotePropertyValue $capped
         # the concatenation needs its own parentheses: -f binds tighter than +,
         # so without them only the second literal would be formatted
         & $say ((
@@ -149,7 +217,9 @@ function Write-SpliceReport([string]$localRoot, [string]$remote, [string]$stateD
                 "{3} already in the baseline, {4} back on disk, {5} unsafe name"
             ) -f $side, $m.Total, $m.Ready.Count, $m.InBaseline, $m.Recreated, $m.UnsafeName.Count,
             $(if ($Peek) { " (dry run, journal kept)" } else { "" }))
-        foreach ($p in @($m.Ready | Select-Object -First 5)) { & $say "    would splice: $p" }
+        & $say ("    metadata: {0} usable, {1} gone from both sides, {2} changed since the delete{3}" `
+                -f $meta.Count, $gone, $conflict, $(if ($capped) { " (capped at $maxSplice)" } else { "" }))
+        foreach ($p in @($meta.Keys | Select-Object -First 5)) { & $say "    would splice: $p" }
         foreach ($p in @($m.UnsafeName | Select-Object -First 3)) { & $say "    unsafe name: $p" }
         $out += $m
     }
