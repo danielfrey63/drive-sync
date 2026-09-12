@@ -3,6 +3,8 @@
 # Decisions (2026-08-30): C: without OS/programs (restic cannot produce a
 # bootable image; reinstall + restore is the recovery path), .git stays in
 # (unpushed commits are the value), package/build caches stay out.
+# Exception since 2026-09-12: .git under AppData goes out - see the shape
+# section below, none of it is your code.
 # Sizes measured 2026-08-30 with du64.
 
 # --- C: system, OS, installed programs (reinstallable) ---
@@ -54,24 +56,15 @@ C:\Users\*\AppData\Local\Microsoft\WindowsApps
 C:\Users\*\AppData\Local\Microsoft\Windows\INetCache
 C:\Users\*\AppData\Local\Microsoft\Windows\WER
 C:\Users\*\AppData\Local\Microsoft\Windows\Explorer
-C:\Users\*\AppData\Local\Microsoft\Edge\User Data\*\Cache
-C:\Users\*\AppData\Local\Microsoft\Edge\User Data\*\Code Cache
-C:\Users\*\AppData\Local\Microsoft\Edge\User Data\*\GPUCache
-C:\Users\*\AppData\Local\Google\Chrome\User Data\*\Cache
-C:\Users\*\AppData\Local\Google\Chrome\User Data\*\Code Cache
-C:\Users\*\AppData\Local\Google\Chrome\User Data\*\GPUCache
-C:\Users\*\AppData\Local\Google\Chrome\User Data\*\Service Worker\CacheStorage
 C:\Users\*\AppData\Local\Google\DriveFS
 # 8 GB WSL ext4.vhdx, locked
 C:\Users\*\AppData\Local\Packages\CanonicalGroupLimited*
 C:\Users\*\AppData\Local\Packages\*\LocalCache
 C:\Users\*\AppData\Local\Packages\*\TempState
 C:\Users\*\AppData\Local\Packages\*\AC
-C:\Users\*\AppData\Local\CrashDumps
 C:\Users\*\AppData\Local\D3DSCache
 C:\Users\*\AppData\Local\NVIDIA
 C:\Users\*\AppData\Local\drive-sync\restic-cache
-C:\Users\*\AppData\Roaming\Code\Cache
 C:\Users\*\AppData\Roaming\Code\CachedData
 C:\Users\*\AppData\Roaming\Code\CachedExtensionVSIXs
 C:\Users\*\.cache
@@ -98,8 +91,45 @@ C:\Users\*\.claude\projects-trash
 C:\Users\*\AppData\Local\claude-cli-nodejs
 C:\Users\*\AppData\Local\Citrix
 C:\Users\*\AppData\Roaming\Code\User\workspaceStorage
-C:\Users\*\AppData\Roaming\Code\logs
 C:\Users\*\AppData\Roaming\com.adobe.dunamis
+
+# --- cache-shaped directories anywhere under AppData (measured 2026-09-12) ---
+# Matched by SHAPE, not by application name. The per-app list above grows
+# forever: every newly installed program brings its own cache and rides along
+# until someone notices it in a diff. These patterns cover a new app on the
+# day it is installed. Together 161'940 files (21.2 % of the C: snapshot)
+# and 23.8 GB. Cookies, Local Storage, IndexedDB and login data are NOT
+# matched - the Chrome profile stays in the backup as decided on 2026-09-03.
+C:\Users\*\AppData\**\Cache
+C:\Users\*\AppData\**\Caches
+C:\Users\*\AppData\**\Code Cache
+C:\Users\*\AppData\**\CacheStorage
+C:\Users\*\AppData\**\GPUCache
+C:\Users\*\AppData\**\ShaderCache
+C:\Users\*\AppData\**\GrShaderCache
+C:\Users\*\AppData\**\DawnCache
+C:\Users\*\AppData\**\DawnGraphiteCache
+C:\Users\*\AppData\**\DawnWebGPUCache
+C:\Users\*\AppData\**\GraphiteDawnCache
+C:\Users\*\AppData\**\BrowserMetrics
+C:\Users\*\AppData\**\Crashpad
+C:\Users\*\AppData\**\CrashDumps
+C:\Users\*\AppData\**\EBWebView
+C:\Users\*\AppData\**\logs
+
+# git repositories under AppData: 270 of them, 34'129 files, 1.18 GB. 263 are
+# throwaway shadow repos that Roo Code / Kilo Code / Cline create per task, and
+# their worktree points at a real project under D:\Meine Ablage\Develop that is
+# backed up in its own right. The rest is an app installed from a clone. None
+# of it is your code, so the "git stays in" rule does not apply here. The task
+# transcripts next to them (*.json, a few KB) are kept.
+C:\Users\*\AppData\**\.git
+
+# sync state only; the actual files live in "OneDrive - <org>". 17'968 files,
+# 2.3 GB, plus a ~15'000-file dump of SharePoint CDN assets on every update of
+# its web front-end (seen 2026-09-10). Costs ~1 MiB of upload per run, so this
+# is hygiene, not speed.
+C:\Users\*\AppData\Local\Microsoft\OneDrive
 
 # iCloud placeholders: 34'075 dehydrated files, provider not running (dry-run 2026-08-30);
 # the content lives at Apple only and cannot be read here
