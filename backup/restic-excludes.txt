@@ -131,6 +131,35 @@ C:\Users\*\AppData\**\.git
 # is hygiene, not speed.
 C:\Users\*\AppData\Local\Microsoft\OneDrive
 
+# --- package stores inside scoop\persist (measured 2026-09-12) ---
+# Refines the 2026-08-30 decision to keep scoop\persist. That was right in
+# principle - persist is application data - but for these tools persist is
+# where the package store lives, not the configuration: 185'579 files and
+# 25.72 GB, every byte of it rebuildable from a lockfile or a re-download.
+# The actual config stays behind: poetry\config is one file, podman\config
+# plus connections are five.
+C:\Users\*\scoop\persist\nodejs*\cache
+C:\Users\*\scoop\persist\miniconda3\envs
+C:\Users\*\scoop\persist\bun\install
+C:\Users\*\scoop\persist\poetry\envs
+C:\Users\*\scoop\persist\nvm
+# VM disk images - same category as the Docker/WSL vhdx further up
+C:\Users\*\scoop\persist\podman\data
+
+# IDE plugins across six IntelliJ generations back to 2023.3: 61'208 files,
+# 11.43 GB, over 99 % of each version directory, all from the marketplace.
+# Keymaps, code styles and inspection profiles are a few MB and stay.
+C:\Users\*\AppData\Roaming\JetBrains\*\plugins
+
+# 2.40 GB in nine bundles, re-downloaded on demand
+C:\Users\*\AppData\Roaming\Claude\vm_bundles
+# code knowledge graph index, 1.08 GB in twelve files, rebuilt from the sources
+C:\Users\*\AppData\**\globalStorage\.ckg
+# bisync listings, 1.34 GB in eleven files, rewritten by every 04:00 run - so
+# this is daily churn, not just bulk. Worthless after a restore in any case:
+# a freshly restored tree needs a -Resync, which regenerates them.
+C:\Users\*\AppData\Local\rclone\bisync
+
 # iCloud placeholders: 34'075 dehydrated files, provider not running (dry-run 2026-08-30);
 # the content lives at Apple only and cannot be read here
 C:\Users\*\Pictures\iCloud Photos
