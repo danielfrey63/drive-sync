@@ -37,6 +37,16 @@ New-Item -ItemType Directory -Force $logDir | Out-Null
 $log = Join-Path $logDir ("backup-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
 $lock = Join-Path $DriveSyncConfig.StateDir "backup.lock"
 $latchFile = Join-Path $DriveSyncConfig.StateDir "backup-anomaly.json"
+$postponeStamp = Join-Path $DriveSyncConfig.StateDir "backup-postponed.txt"
+
+# how many runs in a row were postponed; a damaged or missing file counts as 0
+function Get-PostponeCount {
+    if (-not (Test-Path $postponeStamp)) { return 0 }
+    $raw = (Get-Content $postponeStamp -Raw -ErrorAction SilentlyContinue)
+    $n = 0
+    if ([int]::TryParse(("$raw").Trim(), [ref]$n)) { return $n }
+    return 0
+}
 
 function Log($msg) {
     $line = "{0} {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg
@@ -118,12 +128,22 @@ try {
         if ($DryRun) { $args += "--dry-run"; $args += "--verbose" }
 
         Log "backup start [$source] (vss=$useVss dryrun=$DryRun) -> $($cfg.Repository)"
-        for ($attempt = 1; $attempt -le $cfg.BackupRetries; $attempt++) {
+        $waits = @($cfg.RetryWaitsSec)
+        $attempts = $waits.Count + 1
+        for ($attempt = 1; $attempt -le $attempts; $attempt++) {
             $srcOut = & $cfg.Restic @args @common 2>&1 | Tee-Object -FilePath $log -Append
             $rc = $LASTEXITCODE
             if ($rc -in 0, 3) { break }
-            Log "backup [$source] attempt $attempt/$($cfg.BackupRetries) failed rc=$rc, retrying in $($cfg.RetryWaitSec)s"
-            Start-Sleep -Seconds $cfg.RetryWaitSec
+            if ($attempt -eq $attempts) { break }
+
+            # wait FOR THE BOX, not for the clock: a short nap costs one poll
+            # interval, a long one uses the whole budget and then gives up
+            $budget = $waits[$attempt - 1]
+            Log "backup [$source] attempt $attempt/$attempts failed rc=$rc, waiting up to $budget s for the box"
+            $state = Wait-BackupTransport -Config $cfg -TimeoutSec $budget -PollSec $cfg.RetryPollSec
+            Log "backup [$source] transport is $state"
+            # no amount of waiting puts a key back into the agent
+            if ($state -eq "broken") { break }
             & $cfg.Restic unlock @common 2>&1 | Out-Null
         }
         $out += $srcOut
@@ -148,8 +168,29 @@ try {
     }
     # 3 = some source files could not be read; the snapshot is still complete for the rest
     if ($rc -eq 3) { Log "backup finished with unreadable files (rc=3)" }
-    elseif ($rc -ne 0) { Fail "backup FAILED rc=$rc" $rc }
+    elseif ($rc -ne 0) {
+        # A dead transport is not a broken backup. Ask the box directly rather
+        # than pattern-matching restic's error text, and only a missing NETWORK
+        # counts as a postponement - "broken" (key gone, host key changed,
+        # SSH-Support off) is a real failure and must say so. Maintenance is
+        # skipped either way: an incomplete run never prunes.
+        $state = Get-BackupTransportState -Config $cfg
+        if ($state -eq "unreachable") {
+            $missed = (Get-PostponeCount) + 1
+            Set-Content -Path $postponeStamp -Value $missed
+            $hours = $missed * $cfg.IntervalHours
+            if ($missed -ge $cfg.PostponeEscalateAfter) {
+                Fail "backup FAILED: box unreachable for $missed runs in a row (~$hours h without a backup)" $rc
+            }
+            Log "backup POSTPONED rc=${rc}: box unreachable ($missed in a row), next run continues where this one stopped"
+            Notify "Backup postponed" "Storage box not reachable (rc=$rc, $missed in a row).`nThe next run continues automatically.`nLog: $log"
+            exit 0
+        }
+        Fail "backup FAILED rc=$rc (transport $state)" $rc
+    }
     else { Log "backup done" }
+    # a completed run clears the postponement streak
+    Remove-Item $postponeStamp -ErrorAction SilentlyContinue
 
     # restic's own summary lines (one "Added"/"processed" pair per source) make the toast body
     $summary = @($out | Where-Object { "$_" -match '^(Added to the repository|processed \d)' } | ForEach-Object { "$_".Trim() })

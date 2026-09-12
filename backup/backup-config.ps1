@@ -23,11 +23,23 @@ $BackupConfig = @{
     KeepDaily    = 30
     KeepMonthly  = 12
     # The sftp backend runs a single ssh; when the connection dies, the whole
-    # run aborts (seen twice on 31.08.2026: Intel Wi-Fi driver resets after
-    # hours of sustained upload). A retry resumes from the repository index,
-    # so re-uploaded work is near zero.
-    BackupRetries = 5
-    RetryWaitSec  = 60
+    # run aborts (Intel Wi-Fi driver resets on 31.08.2026, a suspend in the
+    # middle of a run on 11.09.2026). A retry resumes from the repository
+    # index, so re-uploaded work is near zero.
+    #
+    # One entry per retry, and the number is a BUDGET, not a sleep: the run
+    # polls the box and continues the moment it answers. The old fixed minute
+    # was useless after a suspend - all five retries fell inside the window in
+    # which the Wi-Fi had not reassociated yet. This ladder waits ~58 min in
+    # total, which covers a resume; a longer absence becomes a postponement.
+    RetryWaitsSec = @(60, 180, 420, 900, 1800)
+    RetryPollSec  = 15
+    # A postponement is only harmless while it is rare. Consecutive ones mean
+    # something that does not fix itself - SSH-Support switched off in the
+    # Console looks exactly like a suspended laptop from the outside - so after
+    # this many in a row (times IntervalHours = a day) it is reported as a
+    # failure instead. Any successful run resets the counter.
+    PostponeEscalateAfter = 4
 
     # until the first snapshot of a tree exists, every restart re-reads and
     # re-chunks the whole tree; higher read concurrency shortens that phase

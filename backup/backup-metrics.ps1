@@ -1,6 +1,7 @@
-# Shared snapshot metrics for the restic backup, and the ransomware tripwire
-# built on them. Dot-sourced by run-backup.ps1 (verdict on the run that just
-# finished) and by backup-status.ps1 (snapshot list and the -Audit replay).
+# Shared helpers for the restic backup: snapshot metrics, the ransomware
+# tripwire built on them, and the transport probe that tells a dead connection
+# apart from a broken backup. Dot-sourced by run-backup.ps1 (verdict on the run
+# that just finished) and by backup-status.ps1 (snapshot list, -Audit replay).
 #
 # restic stores the summary of a run inside the snapshot itself, so the whole
 # history is available from one cheap "snapshots --json" call - no extra state
@@ -197,4 +198,89 @@ function Set-BackupAnomalyLatch {
         time    = (Get-Date).ToString("o")
         reasons = $Reasons
     } | ConvertTo-Json -Depth 4 | Set-Content -Path $Path -Encoding utf8
+}
+
+# --- transport -------------------------------------------------------------
+#
+# The laptop is suspended on purpose whenever it travels, and a suspend in the
+# middle of a run kills the ssh session: every lock operation then fails with
+# "exit status 255" and restic aborts (seen 11.09.2026, asleep 17:24 to 21:53).
+# That is not a broken backup, it is a missing network - so the pipeline waits
+# for the box to answer instead of retrying blindly into a dead interface, and
+# reports a postponement rather than a failure when it stays away.
+
+# Two stages, because one boolean cannot carry the difference that matters.
+# An ssh probe alone fails for a missing network AND for a key that is no
+# longer in the agent - and calling the second one a postponement would hide a
+# dead backup behind a friendly message, which is the exact failure this
+# pipeline keeps running into. So: TCP first (pure transport), ssh second.
+#
+#   ok           reachable and authenticated
+#   unreachable  no TCP: suspended, no Wi-Fi, box down  -> postpone, retry later
+#   broken       TCP fine, ssh not: key gone from the agent, host key changed,
+#                SSH-Support switched off in the Console -> a real failure
+function Get-BackupBoxEndpoint {
+    param($Config)
+    # "ssh -G" with the SAME argument list prints the effective configuration
+    # and exits without connecting. Handing the whole line to ssh avoids
+    # reimplementing its parser: picking the host by "first token without a
+    # dash" silently mistakes the VALUE of an option (-p 23, -o Foo=bar) for
+    # the host name, and the resulting "cannot reach it" would be read as a
+    # postponement - hiding a real failure behind a friendly message.
+    $parts = @($Config.SshCommand -split ' ' | Where-Object { $_ })
+    $rest  = @($parts[1..($parts.Count - 1)])
+    $eff = & $parts[0] -G @rest 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $eff) { return $null }
+    $hostLine = @($eff | Where-Object { $_ -match '^hostname ' })[0]
+    $portLine = @($eff | Where-Object { $_ -match '^port ' })[0]
+    if (-not $hostLine) { return $null }
+    $port = 22
+    if ($portLine) { $port = [int]($portLine -replace '^port\s+', '') }
+    return [pscustomobject]@{ HostName = ($hostLine -replace '^hostname\s+', ''); Port = $port }
+}
+
+function Test-BackupBoxTcp {
+    param([string]$HostName, [int]$Port, [int]$TimeoutSec = 10)
+    $client = $null
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $async = $client.BeginConnect($HostName, $Port, $null, $null)
+        if (-not $async.AsyncWaitHandle.WaitOne([TimeSpan]::FromSeconds($TimeoutSec))) { return $false }
+        $client.EndConnect($async)
+        return $client.Connected
+    } catch { return $false }
+    finally { if ($client) { $client.Close() } }
+}
+
+function Get-BackupTransportState {
+    param($Config, [int]$TimeoutSec = 10)
+    $endpoint = Get-BackupBoxEndpoint -Config $Config
+    if (-not $endpoint) { return "broken" }   # alias does not resolve: config problem
+    if (-not (Test-BackupBoxTcp -HostName $endpoint.HostName -Port $endpoint.Port -TimeoutSec $TimeoutSec)) {
+        return "unreachable"
+    }
+    # same binary, alias and subsystem restic uses, so this exercises the real
+    # path: pinned post-quantum KEX, host key, and the agent holding the key
+    $parts = @($Config.SshCommand -split ' ' | Where-Object { $_ })
+    $rest  = @($parts[1..($parts.Count - 1)])
+    try {
+        $null = "" | & $parts[0] -o BatchMode=yes -o ConnectTimeout=$TimeoutSec @rest 2>&1
+        if ($LASTEXITCODE -eq 0) { return "ok" }
+    } catch { }
+    return "broken"
+}
+
+# Returns as soon as the state stops being "unreachable", so a short nap costs
+# one poll interval and not the whole budget. "broken" short-circuits too:
+# waiting cannot put a key back into the agent.
+function Wait-BackupTransport {
+    param($Config, [int]$TimeoutSec, [int]$PollSec = 15)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ($true) {
+        $state = Get-BackupTransportState -Config $Config
+        if ($state -ne "unreachable") { return $state }
+        $remaining = [int]((New-TimeSpan -Start (Get-Date) -End $deadline).TotalSeconds)
+        if ($remaining -le 0) { return "unreachable" }
+        Start-Sleep -Seconds ([Math]::Max(1, [Math]::Min($PollSec, $remaining)))
+    }
 }
