@@ -53,6 +53,8 @@ Thresholds are static rather than a rolling baseline, because a rolling baseline
 .\backup\run-backup.ps1 -ClearAnomaly
 ```
 
+**Changing `restic-excludes.txt` trips the shrink leg**, and that is correct rather than a bug: files leaving the backup look exactly like files being deleted. The first run after an exclude change will therefore alarm once. Check that the numbers match what you excluded, then release the latch. On 2026-09-12 the shape patterns dropped the C: chain from 763'402 to 574'309 files and the alarm read `corpus shrank 24.77%` — expected, and a useful confirmation that the detector works on real data.
+
 After changing a threshold, run `.\backup\backup-status.ps1 -Audit`. It replays the detector over every snapshot in the repository and prints the four rates plus a verdict per snapshot. A calibrated detector is silent on the entire history — if it is not, the thresholds are wrong, and you find out before arming it rather than at 03:00 on a Sunday.
 
 Logs: `%LOCALAPPDATA%\drive-sync\logs\backup-<yyyyMMdd>.log`. restic cache: `%LOCALAPPDATA%\drive-sync\restic-cache`. Each run ends with a Windows toast (sender "DriveSync Backup", via `ai-toolbox/tools/notify`): restic's "Added to the repository" / "processed" lines on success, the failing step on error; a missing toolbox checkout only silences the toasts.
