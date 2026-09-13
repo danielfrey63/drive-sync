@@ -47,6 +47,16 @@ $BackupConfig = @{
 
     MaintenanceDay = [DayOfWeek]::Sunday   # prune + check run on this weekday
     CheckSubset  = "2%"                    # share of pack data read back per check
+    # Who owns prune/check when several machines back up into the SAME
+    # repository. prune takes an exclusive lock, so a second client starting
+    # the same Sunday loses the race and would report "Maintenance FAILED" for
+    # something that is not a failure. Empty means "this machine", which is the
+    # right answer as long as there is only one. Set it to the COMPUTERNAME of
+    # the designated machine while two are in service, e.g. during a laptop
+    # handover; the other one then skips prune and check and says so in the log.
+    # forget stays on every machine: --group-by host,paths gives each host its
+    # own snapshot chains, so nobody expires anybody else's snapshots.
+    MaintenanceHost = ""
 
     # Ransomware tripwire (see backup-metrics.ps1 for the reasoning). All
     # thresholds are shares of the chain's own size, because C: and D: differ

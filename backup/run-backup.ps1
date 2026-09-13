@@ -264,7 +264,18 @@ try {
     $stamp = Join-Path $DriveSyncConfig.StateDir "backup-maintenance.txt"
     $today = (Get-Date).ToString("yyyy-MM-dd")
     $lastMaintenance = if (Test-Path $stamp) { (Get-Content $stamp -Raw).Trim() } else { "" }
-    if ((Get-Date).DayOfWeek -eq $cfg.MaintenanceDay -and $lastMaintenance -ne $today) {
+    $isMaintenanceDay = ((Get-Date).DayOfWeek -eq $cfg.MaintenanceDay -and $lastMaintenance -ne $today)
+
+    # with several machines in one repository only one may prune: the lock is
+    # exclusive, and the loser would report a failure for something that is not
+    # one. Empty MaintenanceHost means "this machine".
+    $owner = $cfg.MaintenanceHost
+    if (-not $owner) { $owner = $env:COMPUTERNAME }
+
+    if ($isMaintenanceDay -and $owner -ne $env:COMPUTERNAME) {
+        Log "maintenance day, but $owner owns prune/check - skipped on $env:COMPUTERNAME"
+    }
+    elseif ($isMaintenanceDay) {
         Set-Content -Path $stamp -Value $today
         Log "prune"
         & $cfg.Restic prune --max-unused 5% @common 2>&1 | Tee-Object -FilePath $log -Append | Out-Host

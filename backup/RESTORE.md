@@ -11,6 +11,7 @@ Scenarios, from harmless to bad:
 5. [Ransomware](#5-ransomware)
 6. [Restore drill (do this quarterly)](#6-restore-drill-do-this-quarterly)
 7. [Secrets drill (from a second machine)](#7-secrets-drill-from-a-second-machine)
+8. [A new machine beside the old one (planned handover)](#8-a-new-machine-beside-the-old-one-planned-handover)
 
 Then: [Prerequisites](#prerequisites-every-scenario-needs-these), [What the backup does not contain](#what-the-backup-does-not-contain), [Set up now, not later](#set-up-now-not-later).
 
@@ -363,6 +364,48 @@ If you used the Windows fallback: reconnect and reduce `/home/.ssh/authorized_ke
 ### Two-factor recovery codes
 
 The Hetzner account has 2FA. If the device holding the TOTP secret is lost, the account is locked - and with it the box snapshots, the password reset and every other emergency lever in this runbook. The recovery codes must therefore live somewhere that is neither the backup client nor the phone: printed on paper, or in a second password manager vault. Generate a fresh set under `accounts.hetzner.com` → 2FA settings if you did not keep the ones from the original setup.
+
+---
+
+## 8. A new machine beside the old one (planned handover)
+
+Not an emergency, and that is the point: setting up a replacement laptop is the best rehearsal of [scenario 4](#4-the-whole-machine-is-gone) you will ever get. Same steps, no time pressure, and the old machine still works as a fallback. Follow scenario 4 from the page rather than from memory and note every place it turns out to be wrong — that is how this document gets tested. **Three steps of it are actively wrong here**, because it assumes the old machine is gone and compromised.
+
+**Do not replace the key on the box — add one, and verify rather than trust.** Scenario 4 step 3 overwrites `/home/.ssh/authorized_keys` on purpose, to lock out a stolen key. Doing that now locks out the machine you are still using, and tonight's backup fails. The `sftp put` variant in that step definitely replaces; whether `install-ssh-key` appends is not something to find out the hard way. So keep an undo, then check the result **from the old machine**:
+
+```powershell
+$ms = "$env:USERPROFILE\scoop\apps\openssh\current"
+# 1. undo copy, taken from the OLD machine while it still has access
+Set-Content "$env:TEMP\ak-batch.txt" @("get /home/.ssh/authorized_keys $env:TEMP\authorized_keys.bak","quit")
+& "$ms\sftp.exe" -b "$env:TEMP\ak-batch.txt" storagebox
+
+# 2. on the NEW machine: generate and install
+ssh-keygen -t ed25519 -a 100 -C "hetzner-storagebox-<newhost>" -f "$env:USERPROFILE\.ssh\openssh\hetzner_sb"
+Get-Content "$env:USERPROFILE\.ssh\openssh\hetzner_sb.pub" | & "$ms\ssh.exe" -p 23 uXXXXXX@uXXXXXX.your-storagebox.de install-ssh-key
+
+# 3. back on the OLD machine: does it still get in?
+restic snapshots -o $o --compact
+```
+
+If step 3 fails, put the copy back with `put $env:TEMP\authorized_keys.bak /home/.ssh/authorized_keys` and add the new key by editing the file instead.
+
+When you inspect that file, **count keys, not lines**. A single key occupies two entries: the one-line OpenSSH format that port 23 wants, and an `---- BEGIN SSH2 PUBLIC KEY ----` block in RFC4716 for port 22. As of 2026-08-30 the box holds exactly one key in exactly those two forms, 281 bytes — so "two entries" there means one machine, not two.
+
+Remove the old key only when the old laptop is wiped.
+
+**Skip the rotation step.** Scenario 4 step 8 rotates the Storage Box password, the restic repository password and the Google OAuth token, because a lost machine knew them. Nothing is compromised in a planned handover, and rotating the repository password while the old machine still backs up will stop it mid-run.
+
+**Decide who owns maintenance, before both machines see a Sunday.** Both back up into the same repository, and that part is safe by design: `forget --group-by host,paths` gives each host its own snapshot chains, so neither expires the other's snapshots, and everything the two machines have in common is stored once. `prune` is different — it takes an **exclusive** lock, so if both start the same Sunday one loses and reports `Maintenance FAILED` for something that is not a failure. Name the owner in `backup-config.ps1` on the machine that should *not* do it:
+
+```powershell
+MaintenanceHost = "NAME-OF-THE-OWNING-MACHINE"   # $env:COMPUTERNAME of the other one
+```
+
+The non-owner then logs `maintenance day, but X owns prune/check - skipped` and gets on with its backup. Set it back to `""` when only one machine is left.
+
+**Expect one tripwire alarm per machine.** The first snapshot of a new host is exempt from the anomaly check — everything is new by definition — so the new laptop will not alarm on its first run. The *old* one will, if you move data off it: files leaving the backup look exactly like files being deleted. Check the numbers, then `run-backup.ps1 -ClearAnomaly`.
+
+**What to carry over deliberately**, beyond the restore table in scenario 4: the `Host storagebox` block in `~/.ssh/config` (type it, do not copy the key), `backup-config.local.ps1` if one exists, and the scheduled tasks via `install-backup-task.ps1` from an elevated shell. The restic cache under `%LOCALAPPDATA%\drive-sync\restic-cache` is *not* worth copying — it rebuilds itself, and a stale cache is slower than none.
 
 ---
 
