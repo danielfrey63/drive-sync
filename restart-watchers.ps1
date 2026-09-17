@@ -39,6 +39,7 @@ if (Test-Path (Join-Path $stateDir "watchdog-pause")) {
 foreach ($w in $watchers) {
     $lock = Join-Path $stateDir $w.Lock
     $old = Get-Content $lock -ErrorAction SilentlyContinue | Select-Object -First 1
+    $w.OldPid = $old
     $proc = if ($old) { Get-Process -Id $old -ErrorAction SilentlyContinue }
     if ($proc) {
         Stop-Process -Id $old -Force
@@ -56,12 +57,21 @@ foreach ($w in $watchers) {
 }
 
 # the watcher writes its own PID to the lock at startup, so a changed PID is the
-# proof that the restart took - a task result of 0 is not (see the header)
-Start-Sleep -Seconds 3
+# proof that the restart took - a task result of 0 is not (see the header).
+# Poll instead of a fixed pause: start-up takes 4-7 s before the lock is written
+# (rclone capability probes, config resolution), and until then the lock still
+# names the process just killed - a fixed 3 s reported "NOT RUNNING" for two
+# watchers that were fine (2026-09-17).
+$deadline = (Get-Date).AddSeconds(30)
 foreach ($w in $watchers) {
     $lock = Join-Path $stateDir $w.Lock
-    $new = Get-Content $lock -ErrorAction SilentlyContinue | Select-Object -First 1
-    $proc = if ($new) { Get-Process -Id $new -ErrorAction SilentlyContinue }
+    $new = $null; $proc = $null
+    while ($true) {
+        $new = Get-Content $lock -ErrorAction SilentlyContinue | Select-Object -First 1
+        $proc = if ($new -and $new -ne $w.OldPid) { Get-Process -Id $new -ErrorAction SilentlyContinue }
+        if ($proc -or (Get-Date) -ge $deadline) { break }
+        Start-Sleep -Milliseconds 500
+    }
     if ($proc) { Write-Host "$($w.Name): running as PID $new (since $($proc.StartTime.ToString('HH:mm:ss')))" }
-    else { Write-Host "$($w.Name): NOT RUNNING - check $(Join-Path $stateDir $w.Lock.Replace('.lock', '.log'))" }
+    else { Write-Host "$($w.Name): NOT RUNNING after 30 s - check $(Join-Path $stateDir $w.Lock.Replace('.lock', '.log'))" }
 }
