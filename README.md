@@ -56,7 +56,7 @@ flowchart LR
 Three tiers, each covering the blind spots of the one above:
 
 1. **Upload watcher** (`watch-drive.ps1`): a `FileSystemWatcher` batches local events (debounce 15 s / 60 s), uploads via `rclone copy --files-from --no-traverse` (no tree listing), turns renames into server-side `rclone moveto` and verified deletes into Drive-trash moves. On start, a catch-up (`rclone copy --max-age` since the last liveness stamp) closes any coverage gap.
-2. **Cloud watcher** (`watch-cloud.ps1`): polls the Drive Changes API with a persisted page token (cheap delta calls, no listing), downloads changed files and moves cloud-trashed files to the recycle bin. A ledger of recent own uploads suppresses echo downloads.
+2. **Cloud watcher** (`watch-cloud.ps1`): polls the Drive Changes API with a persisted page token (cheap delta calls, no listing), downloads changed files and moves cloud-trashed files to the recycle bin. A ledger of recent own uploads suppresses echo downloads, and a record of local intent — the old name of a rename, a deleted path, written by the upload watcher the moment it reads the event — keeps the cloud watcher from downloading back what is gone locally on purpose while the cloud has not caught up yet.
 3. **Nightly bisync** (`sync-drive.ps1`, default 04:00): full `rclone bisync` as the guarantee layer — conflicts, cloud-side folder renames, anything missed. Watchers defer their flushes while it runs. Every `EmptyDirCleanupDays` a successful run also prunes empty folder skeletons on the remote (`rclone rmdirs` — bisync only tracks files and never sees directories without any).
 
 ### Known limitations
@@ -135,7 +135,8 @@ Include/exclude rules live in [`filters.txt`](filters.txt) — changing them req
 | `watcher.lock`, `cloud-watcher.lock`, `sync.lock` | PID locks (single instance / bisync precedence) |
 | `watcher-status.json`, `cloud-watcher-status.json` | counters for `sync-status.ps1` |
 | `cloud-watcher-pagetoken.txt` | persisted Changes API cursor; deleting it restarts from "now" (the gap is closed by the next bisync) |
-| `upload-ledger.txt` | echo control: own uploads of the last 30 min |
+| `upload-ledger.txt` | echo control: own uploads of the last 60 min |
+| `local-intent.txt` | local renames and deletes not yet carried to the cloud; the cloud watcher does not download these back. Entries expire 180 s after the cloud caught up, or after 60 min if it never did |
 | `dropped-deletes-path1.txt`, `dropped-deletes-path2.txt` | paths whose delete a `MaxDeletes` storm dropped, per bisync side; consumed and cleared by the next nightly run |
 | `rmdirs-last.txt` | timestamp of the last remote empty-dir cleanup |
 | `watcher-lastseen.txt`, `watcher-catchup.log` | liveness stamp of the upload watcher ("everything up to here is uploaded or captured" — only advances while nothing is pending) and the log of the last start-up catch-up |
