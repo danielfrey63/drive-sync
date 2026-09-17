@@ -353,7 +353,8 @@ try {
                     Write-Log "WARN case-only 2-step moveto failed for $newR - falling back"
                 }
                 & $rcloneExe moveto "$remote$oldR" "$remote$newR" @pacer --log-level ERROR --log-file $logFile 2>$null
-                if ($LASTEXITCODE -eq 0) {
+                $moveExit = $LASTEXITCODE
+                if ($moveExit -eq 0) {
                     $renamedTotal++
                     Write-Log "rename: $oldR -> $newR"
                     Add-LedgerEntries @($rn.New)
@@ -363,6 +364,13 @@ try {
                     # old path unknown in the cloud (e.g. editor tmp-file save): upload instead
                     Write-Log "rename fallback to upload: $newR"
                     Add-PendingPath $newAbs $rn.New
+                    # exit 3/4 = the old path never existed in the cloud, so there
+                    # is nothing to resurrect: complete the intent now. These are
+                    # the bulk - 258 temp-file saves against 15 real renames in one
+                    # hour on 2026-09-17 - and would otherwise sit in the record
+                    # for the full hour. Any other failure may have left the old
+                    # path in the cloud; that entry stays and ages out.
+                    if ($moveExit -in 3, 4) { $intentDone.Add($rn.Old) }
                 }
             }
             $renames.Clear()
