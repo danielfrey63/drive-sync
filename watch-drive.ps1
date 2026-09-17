@@ -98,6 +98,9 @@ Set-Content $lockFile $PID
 # --- journal for deletes the cap drops --------------------------------------
 . (Join-Path $PSScriptRoot "delete-journal.ps1")
 
+# --- local intent: tells the cloud watcher what is gone here on purpose -----
+. (Join-Path $PSScriptRoot "local-intent.ps1")
+
 # --- derive exclude sets from filters.txt -----------------------------------
 . (Join-Path $PSScriptRoot "filter-rules.ps1")
 $rules = Get-ExcludeRules $filters
@@ -257,6 +260,10 @@ try {
         }
         $drained = 0
         $evtTrace = [System.Collections.Generic.List[string]]::new()
+        # old paths of renames and deleted paths, published to the cloud watcher
+        # right after this drain - NOT at flush time, which can be minutes later
+        # (local-intent.ps1 has the 2026-09-17 incident)
+        $intent = [System.Collections.Generic.List[string]]::new()
         foreach ($evt in @(Get-Event)) {
             $drained++
             $src = $evt.SourceIdentifier
@@ -271,13 +278,14 @@ try {
             else { $evtTrace.Add("$src $rel") }
 
             if ($src -eq "fswDeleted") {
-                if (-not (Test-Excluded $rules $rel)) { [void]$deletes.Add($rel) }
+                if (-not (Test-Excluded $rules $rel)) { [void]$deletes.Add($rel); $intent.Add($rel) }
             }
             elseif ($src -eq "fswRenamed") {
                 $oldRel = $ea.OldFullPath.Substring($root.Length + 1)
                 $oldOk = -not (Test-Excluded $rules $oldRel)
                 $newOk = -not (Test-Excluded $rules $rel)
                 if ($oldOk -and $oldRel -like "*.partial") { $oldOk = $false }   # rclone download temp -> plain create
+                if ($oldOk) { $intent.Add($oldRel) }
                 if ($oldOk -and $newOk) { $renames.Add([pscustomobject]@{ Old = $oldRel; New = $rel }) }
                 elseif ($oldOk) { [void]$deletes.Add($oldRel) }   # renamed INTO an excluded name
                 elseif ($newOk) { Add-PendingPath $path $rel }    # renamed OUT of an excluded/temp name
@@ -294,6 +302,7 @@ try {
             }
             if ($null -eq $oldestPending) { $oldestPending = Get-Date }
         }
+        if ($intent.Count -gt 0) { Add-LocalIntent $stateDir @($intent) }
         if ($evtTrace.Count -gt 0) { Write-EventLog $evtTrace }
         if ($drained -gt 0) { Write-Log "events: $drained drained, $($pending.Count) up / $($renames.Count) ren / $($deletes.Count) del pending" }
 
@@ -311,6 +320,10 @@ try {
 
         # the flush cycle must never kill the watcher - log and carry on
         try {
+            # paths whose local rename/delete the cloud now reflects; their
+            # intent entries are completed at the end of the flush
+            $intentDone = [System.Collections.Generic.List[string]]::new()
+
             # 1) renames: server-side moves, in event order (rename chains)
             foreach ($rn in @($renames)) {
                 $newAbs = Join-Path $root $rn.New
@@ -330,6 +343,7 @@ try {
                             $renamedTotal++
                             Write-Log "rename (case-only, 2-step): $oldR -> $newR"
                             Add-LedgerEntries @($rn.New, "$($rn.New).casemv-tmp")
+                            $intentDone.Add($rn.Old)
                             continue
                         }
                         # step 2 failed: move back so no .casemv-tmp orphan is
@@ -343,6 +357,7 @@ try {
                     $renamedTotal++
                     Write-Log "rename: $oldR -> $newR"
                     Add-LedgerEntries @($rn.New)
+                    $intentDone.Add($rn.Old)
                 }
                 else {
                     # old path unknown in the cloud (e.g. editor tmp-file save): upload instead
@@ -409,17 +424,18 @@ try {
                 $delList = @($deletes | Sort-Object)
                 $deletes.Clear()
                 foreach ($d in $delList) {
-                    if (Test-Path -LiteralPath (Join-Path $root $d)) { continue }   # recreated meanwhile
-                    if (@($delList | Where-Object { $_ -ne $d -and $d.StartsWith("$_\") }).Count -gt 0) { continue }   # ancestor dir covers it
+                    if (Test-Path -LiteralPath (Join-Path $root $d)) { $intentDone.Add($d); continue }   # recreated meanwhile
+                    if (@($delList | Where-Object { $_ -ne $d -and $d.StartsWith("$_\") }).Count -gt 0) { $intentDone.Add($d); continue }   # ancestor dir covers it
                     $dR = $d -replace '\\', '/'
                     $stat = & $rcloneExe lsjson "$remote$dR" --stat @pacer 2>$null | ConvertFrom-Json
-                    if (-not $stat) { continue }   # not in the cloud (already gone)
+                    if (-not $stat) { $intentDone.Add($d); continue }   # not in the cloud (already gone)
                     if ($stat.IsDir) { & $rcloneExe purge "$remote$dR" @pacer --log-level ERROR --log-file $logFile 2>$null }
                     else { & $rcloneExe deletefile "$remote$dR" @pacer --log-level ERROR --log-file $logFile 2>$null }
-                    if ($LASTEXITCODE -eq 0) { $deletedTotal++; Write-Log "delete -> Drive trash: $dR" }
+                    if ($LASTEXITCODE -eq 0) { $deletedTotal++; $intentDone.Add($d); Write-Log "delete -> Drive trash: $dR" }
                     else { Write-Log "WARN delete failed: $dR" }
                 }
             }
+            if ($intentDone.Count -gt 0) { Complete-LocalIntent $stateDir @($intentDone) }
 
             Write-Status
             # a fully drained flush is the freshest safe point for the stamp

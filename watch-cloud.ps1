@@ -136,6 +136,9 @@ Set-Content $lockFile $PID
 # --- journal for trash events the cap drops ---------------------------------
 . (Join-Path $PSScriptRoot "delete-journal.ps1")
 
+# --- local intent: what the upload watcher removed here on purpose ----------
+. (Join-Path $PSScriptRoot "local-intent.ps1")
+
 # --- exclude rules from filters.txt -----------------------------------------
 . (Join-Path $PSScriptRoot "filter-rules.ps1")
 $rules = Get-ExcludeRules (Join-Path $PSScriptRoot "filters.txt")
@@ -316,6 +319,13 @@ try {
                     $skipped = $pending.Count - $batch.Count
                     $pending.Clear()
                     if ($skipped -gt 0) { Write-Log "skipped $skipped own-upload echo(es)" }
+                    # local rename/delete guard: a path that is gone locally on
+                    # purpose, while the cloud still carries it because the upload
+                    # watcher has not flushed yet, must not be downloaded back
+                    # (2026-09-17: a renamed file reappeared under its old name)
+                    $held = @()
+                    $batch = @(Select-DownloadsWithoutLocalIntent $stateDir $root $batch ([ref]$held))
+                    foreach ($h in $held) { Write-Log "download skipped, local rename/delete not yet in the cloud: $h" }
                     # parent guard: a vanished local parent folder usually means
                     # a local restructuring is in progress - downloading would
                     # resurrect the old tree (2026-08-28 incident, 897 MB).
