@@ -325,11 +325,33 @@ try {
             $intentDone = [System.Collections.Generic.List[string]]::new()
 
             # 1) renames: server-side moves, in event order (rename chains)
-            foreach ($rn in @($renames)) {
+            $renList = @($renames)
+            for ($i = 0; $i -lt $renList.Count; $i++) {
+                $rn = $renList[$i]
                 $newAbs = Join-Path $root $rn.New
-                if (-not (Test-Path -LiteralPath $newAbs)) { continue }   # gone again; delete/bisync covers it
+                if (-not (Test-Path -LiteralPath $newAbs)) {
+                    # The file already left its new name - a rename followed by
+                    # a move or a second rename inside one debounce window, or
+                    # queued behind a long flush. The cloud still holds it under
+                    # the OLD name, and that copy has to follow the file: skipping
+                    # it left the old name in the cloud and the nightly bisync
+                    # brought it back as a new file (2026-09-17: renamed, then
+                    # moved into a subfolder -> old name back at 04:26).
+                    $next = $null
+                    for ($j = $i + 1; $j -lt $renList.Count; $j++) {
+                        if ($renList[$j].Old -ieq $rn.New) { $next = $renList[$j]; break }
+                    }
+                    if ($next) { $next.Old = $rn.Old; $intentDone.Add($rn.New) }   # A->B, B->C replays as A->C; B never reached the cloud
+                    elseif (-not (Test-Path -LiteralPath (Join-Path $root $rn.Old))) {
+                        # moved elsewhere (Deleted + Created, uploaded as new) or
+                        # deleted: the old cloud copy goes to the trash
+                        [void]$deletes.Add($rn.Old)
+                    }
+                    continue
+                }
                 $oldR = $rn.Old -replace '\\', '/'
                 $newR = $rn.New -replace '\\', '/'
+                if ($oldR -ceq $newR) { $intentDone.Add($rn.Old); continue }   # chain came back to its start
                 if ($oldR -ne $newR -and $oldR -ieq $newR) {
                     # case-only rename: Drive's case-insensitive path lookup
                     # resolves source and destination to the same object, the
