@@ -16,10 +16,15 @@
 # Usage:
 #   pwsh -File sync-drive.ps1              # normal bisync run
 #   pwsh -File sync-drive.ps1 -Resync      # re-baseline (after filter changes!)
+#   pwsh -File sync-drive.ps1 -Resync -ResyncMode newer
+#                                          # re-baseline, newest version wins on
+#                                          # differing files (instead of local)
 #   pwsh -File sync-drive.ps1 -DryRun      # show what would happen
 
 param(
     [switch]$Resync,
+    [ValidateSet("", "path1", "path2", "newer", "older", "larger", "smaller")]
+    [string]$ResyncMode = "",
     [switch]$DryRun
 )
 
@@ -34,6 +39,29 @@ $lockFile = Join-Path $stateDir "sync.lock"
 $statusFile = Join-Path $stateDir "status.json"
 New-Item -ItemType Directory -Force $logDir | Out-Null
 . (Join-Path $PSScriptRoot "bisync-index.ps1")
+
+# --- local root guard -------------------------------------------------------
+# Never let bisync loose on a root that is not writable: on 2026-09-21 a run
+# hit the BitLocker-locked D: of a freshly booted laptop (scheduled catch-up
+# fired before the first logon unlocked the drive), ground through 1.5M copy
+# errors for 36 hours and corrupted the listings (critical abort, resync
+# required). The drive usually unlocks at logon, so wait for it instead of
+# skipping the day's run; give up after 4 hours.
+$guardDeadline = (Get-Date).AddHours(4)
+while ($true) {
+    try {
+        $probe = Join-Path $localPath ".drive-sync-probe"
+        [IO.File]::WriteAllText($probe, "probe")
+        Remove-Item $probe -Force -Confirm:$false
+        break
+    } catch {
+        if ((Get-Date) -gt $guardDeadline) {
+            Write-Warning "local root '$localPath' stayed unwritable for 4h (BitLocker locked? not mounted?) - refusing to run: $_"
+            exit 2
+        }
+        Start-Sleep -Seconds 60
+    }
+}
 
 # --- lock handling ----------------------------------------------------------
 if (Test-Path $lockFile) {
@@ -86,7 +114,10 @@ try {
     # --max-lock on every run: without it a killed bisync leaves a lock file
     # that never expires and blocks all future runs until removed by hand
     $rcArgs += @("--max-lock", "2h")
-    if ($Resync) { $rcArgs += "--resync" }
+    if ($Resync) {
+        $rcArgs += "--resync"
+        if ($ResyncMode) { $rcArgs += @("--resync-mode", $ResyncMode) }
+    }
     else { $rcArgs += @("--resilient", "--recover") }
     if ($DryRun) { $rcArgs += "--dry-run" }
 
