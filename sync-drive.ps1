@@ -95,6 +95,13 @@ try {
         "--filters-file", $filters
         "--drive-skip-gdocs"
         "--drive-skip-dangling-shortcuts"
+        # Drive refuses to serve files its heuristics flag as malware/spam
+        # (403 cannotDownloadAbusiveFile) - a shellshock test script, a Delphi
+        # HelloWorld.exe, two PDFs. Never noticed on the original machine (the
+        # files were local), but the first resync of a second machine aborted
+        # on them critically (2026-09-24). The flag only acknowledges the
+        # warning; the files are our own corpus.
+        "--drive-acknowledge-abuse"
         "--modify-window", "1s"
         "--fast-list"
         # keep the newer version under the ORIGINAL name on a two-sided change;
