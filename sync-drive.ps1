@@ -20,11 +20,15 @@
 #                                          # re-baseline, newest version wins on
 #                                          # differing files (instead of local)
 #   pwsh -File sync-drive.ps1 -DryRun      # show what would happen
+#   pwsh -File sync-drive.ps1 -Resync -SkipResyncGuard
+#                                          # resync without the revive guard
+#                                          # (see resync-guard.ps1)
 
 param(
     [switch]$Resync,
     [ValidateSet("", "path1", "path2", "newer", "older", "larger", "smaller")]
     [string]$ResyncMode = "",
+    [switch]$SkipResyncGuard,
     [switch]$DryRun
 )
 
@@ -90,6 +94,20 @@ try {
 
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $logFile = Join-Path $logDir "bisync-$stamp.log"
+
+    # --- revive guard ---------------------------------------------------------
+    # --resync merges and never deletes: a stale local copy would re-upload
+    # everything deleted elsewhere since (676 revived files, 2026-09-25). The
+    # guard recycles local twins of trashed cloud files first; a failed guard
+    # must not fall through to a blind resync.
+    if ($Resync -and -not $SkipResyncGuard) {
+        & pwsh -NoProfile -File (Join-Path $PSScriptRoot "resync-guard.ps1") -DryRun:$DryRun -LogFile $logFile
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "resync guard failed (exit $LASTEXITCODE) - refusing to resync blind; see $logFile or use -SkipResyncGuard"
+            exit 2
+        }
+    }
+
     $rcArgs = @(
         "bisync", $localPath, $remote
         "--filters-file", $filters

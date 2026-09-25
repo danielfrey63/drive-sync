@@ -61,10 +61,6 @@ elseif (-not $env:RCLONE_CONFIG) {
     $cfg = @(& rclone config file 2>$null)[-1]
     if ($cfg -and (Test-Path $cfg)) { $env:RCLONE_CONFIG = $cfg }
 }
-# recycle via rclone if the build supports --local-use-trash (rclone PR 9741),
-# otherwise fall back to the SHFileOperation shim below
-$rcloneHasLocalTrash = [bool](& $rcloneExe help flags local-use-trash 2>$null | Select-String "local-use-trash")
-
 function Write-Log([string]$msg) {
     # logging must never kill the watcher
     try {
@@ -97,31 +93,9 @@ function Get-RecentUploads {
     return $recent
 }
 
-# --- recycle-bin delete via SHFileOperation (no UI, FOF_ALLOWUNDO) ----------
-Add-Type -TypeDefinition @"
-using System;
-using System.Runtime.InteropServices;
-public static class RecycleBin {
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct SHFILEOPSTRUCT {
-        public IntPtr hwnd;
-        public uint wFunc;
-        [MarshalAs(UnmanagedType.LPWStr)] public string pFrom;
-        [MarshalAs(UnmanagedType.LPWStr)] public string pTo;
-        public ushort fFlags;
-        [MarshalAs(UnmanagedType.Bool)] public bool fAnyOperationsAborted;
-        public IntPtr hNameMappings;
-        [MarshalAs(UnmanagedType.LPWStr)] public string lpszProgressTitle;
-    }
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
-    private static extern int SHFileOperation(ref SHFILEOPSTRUCT op);
-    // FO_DELETE with FOF_ALLOWUNDO|FOF_NOCONFIRMATION|FOF_SILENT|FOF_NOERRORUI
-    public static int Delete(string path) {
-        var op = new SHFILEOPSTRUCT { wFunc = 3, pFrom = path + "\0", fFlags = 0x0454 };
-        return SHFileOperation(ref op);
-    }
-}
-"@
+# recycle-bin delete (rclone --local-use-trash or SHFileOperation shim), shared
+# with resync-guard.ps1
+. (Join-Path $PSScriptRoot "recycle-bin.ps1")
 
 # --- single instance --------------------------------------------------------
 if (Test-Path $lockFile) {
@@ -387,13 +361,7 @@ try {
                         $tR = $t -replace '\\', '/'
                         $stat = & $rcloneExe lsjson "${remoteName}:$tR" --stat @($DriveSyncConfig.Pacer) 2>$null | ConvertFrom-Json
                         if ($stat) { Write-Log "trash event skipped (path live in cloud again): $t"; continue }
-                        if ($rcloneHasLocalTrash) {
-                            $isDir = Test-Path -LiteralPath $abs -PathType Container
-                            if ($isDir) { & $rcloneExe purge $abs --local-use-trash -q 2>$null }
-                            else { & $rcloneExe deletefile $abs --local-use-trash -q 2>$null }
-                            $rc = $LASTEXITCODE
-                        }
-                        else { $rc = [RecycleBin]::Delete($abs) }
+                        $rc = Move-ToRecycleBin $abs
                         if ($rc -eq 0) { $recycledTotal++; Write-Log "cloud trash -> recycle bin: $t" }
                         else { Write-Log "WARN recycle failed (rc=$rc): $t" }
                     }
