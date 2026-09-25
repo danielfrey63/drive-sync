@@ -124,6 +124,16 @@ Include/exclude rules live in [`filters.txt`](filters.txt) — changing them req
 - **Usually unnecessary:** the cloud watcher polls the Changes API every `PollSeconds`, so remote edits land locally within 1–2 minutes. If they don't, check `sync-status.ps1` first — a dead watcher or a filtered path is more likely than a missing "force".
 - **Avoid** `rclone sync gdrive: <local>`: it mirrors deletions and bypasses every safety net of this setup.
 
+### Adding a second machine
+
+Every machine keeps its own bisync listings, locks, ledger and Changes cursor, so two machines against one remote work — with three rules learned the hard way (2026-09-21 to 25):
+
+1. **Nothing stale on the new machine before the first resync.** `--resync` merges and never deletes: any file that exists only locally is uploaded again, including everything that was deliberately deleted elsewhere since that copy was made (676 revived files on the first attempt). Start from an empty local root, or run `rclone check "<local>" gdrive: --one-way --missing-on-dst stale.txt --filter-from filters.txt` first and delete what it lists.
+2. **Resync with `-ResyncMode newer`.** The default (`path1`, local wins) would let an older local copy overwrite newer cloud versions.
+3. **Offset the nightly runs** (`BisyncDailyAt` in `config.local.ps1`, e.g. `02:00` vs `04:00`). Two bisyncs modifying the same remote at once are not safe; the final listing validation fails on the other machine's writes.
+
+Also: unlock BitLocker data drives automatically (`Enable-BitLockerAutoUnlock -MountPoint D:`, drive must be unlocked to run it) — a scheduled run against a locked drive aborts critically after grinding through every file; the root guard in `sync-drive.ps1` now waits up to 4 h for the drive instead. And `.git` directories are excluded from the corpus, so repos on the second machine need `git init -b main` + remote + `git reset --hard <remote>/main` once.
+
 <details>
 <summary><b>State files reference</b></summary>
 
