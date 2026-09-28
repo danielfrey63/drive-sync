@@ -7,12 +7,17 @@
 # has no prior listing to tell "only local" from "deleted elsewhere"; the
 # Drive trash has: every deletion our chain performs lands there for 30 days.
 #
-# Rule: a local file whose path AND modtime (1s window, like --modify-window)
-# match a trashed cloud file, and whose path is not live in the cloud, is the
-# deleted copy - it goes to the recycle bin before the resync can upload it.
-# A local file that is newer than its trashed twin was rewritten since and
-# stays. Reach is the trash retention (30 days); older stale copies still
-# need a manual "rclone check <local> gdrive: --one-way --missing-on-dst".
+# Rule: a local file whose path matches a trashed cloud file, whose modtime is
+# not newer than that tombstone (1s window, like --modify-window), and whose
+# path is not live in the cloud, is a stale copy of a deleted file - it goes
+# to the recycle bin before the resync can upload it. Equal modtime is the
+# plain case (this copy IS the deleted file); an older modtime means the file
+# was edited elsewhere and then deleted while this copy never saw the edit
+# (pmo/tools/transcribe_watch.py, 2026-09-28: local 09-17, tombstone 09-22 -
+# the equal-only rule let it through). Only a local file that is newer than
+# every trashed twin was rewritten since and stays. Reach is the trash
+# retention (30 days); older stale copies still need a manual
+# "rclone check <local> gdrive: --one-way --missing-on-dst".
 #
 # Usage:
 #   pwsh -File resync-guard.ps1            # act
@@ -85,9 +90,10 @@ foreach ($p in $trash.Keys) {
     if (-not (Test-Path -LiteralPath $abs -PathType Leaf)) { continue }
     $localMod = (Get-Item -LiteralPath $abs).LastWriteTime
     $localSec = [datetime]::new($localMod.Year, $localMod.Month, $localMod.Day, $localMod.Hour, $localMod.Minute, $localMod.Second)
-    foreach ($t in $trash[$p]) {
-        if ([math]::Abs(($localSec - $t).TotalSeconds) -le 1) { $candidates.Add($p); break }
-    }
+    # not newer than the newest tombstone: equal = the deleted copy itself,
+    # older = never saw the last edit before the deletion; both are stale
+    $newestTomb = ($trash[$p] | Measure-Object -Maximum).Maximum
+    if (($localSec - $newestTomb).TotalSeconds -le 1) { $candidates.Add($p) }
 }
 Write-Log "local twins of trashed files: $($candidates.Count)"
 if ($candidates.Count -eq 0) { exit 0 }
