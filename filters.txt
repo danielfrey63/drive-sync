@@ -14,6 +14,11 @@
 # volatile files caused bisync conflict copies (2026-08-16)
 - .claude/**
 
+# Kilo per-project state, same treatment as .claude: .kilo/worktrees are git
+# worktrees (reproducible, 12 trees / 8.5 GiB measured 2026-10-01) and were
+# the bulk of the files revived by the unguarded resync of 2026-09-25
+- .kilo/**
+
 # Legacy version control metadata (measured 2026-08-09: CVS 54'882 dirs /
 # 324k files, .svn 5'225 dirs / 65k files - pure churn, spot-checked as
 # genuine VCS metadata, no name collisions with real content)
