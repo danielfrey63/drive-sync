@@ -74,24 +74,10 @@ function Write-Log([string]$msg) {
 
 # Paths the upload watcher recently sent to the cloud (echo control): change
 # events for them are our own doing and must not be downloaded back.
-$ledgerFile = Join-Path $stateDir "upload-ledger.txt"
-function Get-RecentUploads {
-    $recent = @{}
-    try {
-        if (Test-Path $ledgerFile) {
-            # window must cover the Drive changes-API latency: a 486 MB upload
-            # on 2026-08-28 surfaced its change event only 23 min later and was
-            # downloaded back as a foreign change (the old cut was 900s, half
-            # of what the writer keeps). Keep in sync with watch-drive.ps1.
-            $cut = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 3600
-            foreach ($line in Get-Content $ledgerFile -ErrorAction SilentlyContinue) {
-                if ($line -match '^(\d+)\t(.+)$' -and [long]$Matches[1] -gt $cut) { $recent[$Matches[2]] = $true }
-            }
-        }
-    }
-    catch {}
-    return $recent
-}
+# A download is skipped only if the event reports exactly the modtime and
+# size we uploaded - a later change of the same path by another machine is a
+# real change (upload-ledger.ps1 has the 2026-10-03 incident and the format).
+. (Join-Path $PSScriptRoot "upload-ledger.ps1")
 
 # recycle-bin delete (rclone --local-use-trash or SHFileOperation shim), shared
 # with resync-guard.ps1
@@ -202,7 +188,10 @@ $trash = [System.Collections.Generic.HashSet[string]]::new([System.StringCompare
 $downloadedTotal = 0
 $recycledTotal = 0
 $lastSavedToken = $pageToken
-$fields = "changes(removed,fileId,file(id,name,mimeType,parents,trashed,createdTime)),nextPageToken,newStartPageToken"
+$fields = "changes(removed,fileId,file(id,name,mimeType,parents,trashed,createdTime,modifiedTime,size)),nextPageToken,newStartPageToken"
+# cloud state reported by the latest change event per pending path
+# (rel -> @{ M = modtime unix; S = size }), for the echo check at flush time
+$pendingMeta = @{}   # PowerShell hashtables are case-insensitive, like the paths
 # Folders recently CREATED in the cloud (rel path -> unix time first seen).
 # Downloads normally refuse to recreate a missing local parent folder (that
 # smells like a local restructuring in progress - the 2026-08-28 incident
@@ -253,7 +242,13 @@ try {
                     }
                     if ($f.mimeType -like "application/vnd.google-apps.*") { continue }  # gdocs, shortcuts, ...
                     $rel = Resolve-RelPath $f
-                    if ($rel -and -not (Test-Excluded $rules $rel)) { [void]$pending.Add($rel) }
+                    if ($rel -and -not (Test-Excluded $rules $rel)) {
+                        [void]$pending.Add($rel)
+                        # unparsable metadata -> no entry -> path-only echo check
+                        $evtM = ConvertTo-UploadLedgerTime $f.modifiedTime
+                        if ($null -ne $evtM -and "$($f.size)" -match '^\d+$') { $pendingMeta[$rel] = @{ M = $evtM; S = [long]$f.size } }
+                        else { $pendingMeta.Remove($rel) }
+                    }
                 }
                 if ($resp.newStartPageToken) {
                     # advance in memory only; the token FILE is written after a
@@ -288,10 +283,14 @@ try {
                 $didWork = ($pending.Count + $trash.Count) -gt 0
                 # 1) downloads (skipping echoes of our own recent uploads)
                 if ($pending.Count -gt 0) {
-                    $recent = Get-RecentUploads
-                    $batch = @($pending | Where-Object { -not $recent.ContainsKey($_) })
+                    $ledger = Get-UploadLedger $stateDir
+                    $batch = @($pending | Where-Object {
+                            $m = $pendingMeta[$_]
+                            -not (Test-UploadEcho $ledger $_ $(if ($m) { $m.M }) $(if ($m) { $m.S }))
+                        })
                     $skipped = $pending.Count - $batch.Count
                     $pending.Clear()
+                    $pendingMeta.Clear()
                     if ($skipped -gt 0) { Write-Log "skipped $skipped own-upload echo(es)" }
                     # local rename/delete guard: a path that is gone locally on
                     # purpose, while the cloud still carries it because the upload
@@ -345,7 +344,8 @@ try {
                     $trash.Clear()
                 }
                 elseif ($trash.Count -gt 0) {
-                    $recentT = Get-RecentUploads
+                    # path-only on purpose: a trash event carries no state to compare
+                    $recentT = Get-UploadLedger $stateDir
                     foreach ($t in @($trash | Sort-Object)) {
                         $abs = Join-Path $root $t
                         if (-not (Test-Path -LiteralPath $abs)) { continue }   # already gone locally

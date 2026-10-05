@@ -56,7 +56,7 @@ flowchart LR
 Three tiers, each covering the blind spots of the one above:
 
 1. **Upload watcher** (`watch-drive.ps1`): a `FileSystemWatcher` batches local events (debounce 15 s / 60 s), uploads via `rclone copy --files-from --no-traverse` (no tree listing), turns renames into server-side `rclone moveto` and verified deletes into Drive-trash moves. On start, a catch-up (`rclone copy --max-age` since the last liveness stamp) closes any coverage gap.
-2. **Cloud watcher** (`watch-cloud.ps1`): polls the Drive Changes API with a persisted page token (cheap delta calls, no listing), downloads changed files and moves cloud-trashed files to the recycle bin. A ledger of recent own uploads suppresses echo downloads, and a record of local intent — the old name of a rename, a deleted path, written by the upload watcher the moment it reads the event — keeps the cloud watcher from downloading back what is gone locally on purpose while the cloud has not caught up yet.
+2. **Cloud watcher** (`watch-cloud.ps1`): polls the Drive Changes API with a persisted page token (cheap delta calls, no listing), downloads changed files and moves cloud-trashed files to the recycle bin. A ledger of recent own uploads suppresses echo downloads – an event is an echo only if it reports exactly the modtime and size that were uploaded, so a later change of the same path by a second machine still comes down (`upload-ledger.ps1`) –, and a record of local intent — the old name of a rename, a deleted path, written by the upload watcher the moment it reads the event — keeps the cloud watcher from downloading back what is gone locally on purpose while the cloud has not caught up yet.
 3. **Nightly bisync** (`sync-drive.ps1`, default 04:00): full `rclone bisync` as the guarantee layer — conflicts, cloud-side folder renames, anything missed. Watchers defer their flushes while it runs. Every `EmptyDirCleanupDays` a successful run also prunes empty folder skeletons on the remote (`rclone rmdirs` — bisync only tracks files and never sees directories without any).
 
 ### Known limitations
@@ -145,7 +145,7 @@ Also: unlock BitLocker data drives automatically (`Enable-BitLockerAutoUnlock -M
 | `watcher.lock`, `cloud-watcher.lock`, `sync.lock` | PID locks (single instance / bisync precedence) |
 | `watcher-status.json`, `cloud-watcher-status.json` | counters for `sync-status.ps1` |
 | `cloud-watcher-pagetoken.txt` | persisted Changes API cursor; deleting it restarts from "now" (the gap is closed by the next bisync) |
-| `upload-ledger.txt` | echo control: own uploads of the last 60 min |
+| `upload-ledger.txt` | echo control: own uploads of the last 60 min (path, modtime, size) |
 | `local-intent.txt` | local renames and deletes not yet carried to the cloud; the cloud watcher does not download these back. Entries expire 180 s after the cloud caught up, or after 60 min if it never did |
 | `dropped-deletes-path1.txt`, `dropped-deletes-path2.txt` | paths whose delete a `MaxDeletes` storm dropped, per bisync side; consumed and cleared by the next nightly run |
 | `rmdirs-last.txt` | timestamp of the last remote empty-dir cleanup |
@@ -231,6 +231,9 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 | `watch-cloud.ps1` | download watcher cloud → local (new/update/trash); `-Once` runs a single cycle |
 | `watchdog.ps1` | restarts silently died watchers every 15 min |
 | `filter-rules.ps1` | shared exclude logic for the watchers, derived from `filters.txt` |
+| `upload-ledger.ps1` | echo control between the watchers: own uploads with modtime and size |
+| `conflict-names.ps1` | recognises bisync's `.conflictN` losers: the upload watcher never replays that rename, `sweep-conflicts.ps1` moves the losers out of the corpus |
+| `test-conflict-chain.ps1` | tests for the two modules above (no cloud access) |
 | `run-hidden.vbs` | windowless task launcher (no console window flashing) |
 | `install-sync-task.ps1`, `install-watcher-task.ps1` | register the scheduled tasks (idempotent) |
 | `uninstall.ps1` | stops the watchers and removes all four tasks (`-RemoveState` also deletes the state dir) |

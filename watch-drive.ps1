@@ -165,22 +165,13 @@ function Write-Status {
 
 # Every path we upload/rename is recorded here so the cloud watcher can tell
 # our own change events apart from genuine cloud-side changes (echo control).
-$ledgerFile = Join-Path $stateDir "upload-ledger.txt"
+# Each entry carries the modtime and size of what was uploaded, so a later
+# change of the same path by another machine is not mistaken for an echo
+# (upload-ledger.ps1 has the 2026-10-03 incident).
+. (Join-Path $PSScriptRoot "upload-ledger.ps1")
+. (Join-Path $PSScriptRoot "conflict-names.ps1")
 function Add-LedgerEntries([string[]]$rels) {
-    try {
-        $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-        # retention must cover the Drive changes-API latency (a 486 MB upload
-        # surfaced its change event 23 min late on 2026-08-28); keep in sync
-        # with the reader window in watch-cloud.ps1
-        $cut = $now - 3600
-        $keep = @()
-        if (Test-Path $ledgerFile) {
-            $keep = @(Get-Content $ledgerFile -ErrorAction SilentlyContinue |
-                Where-Object { $_ -match '^(\d+)\t' -and [long]$Matches[1] -gt $cut })
-        }
-        $keep += @($rels | ForEach-Object { "$now`t$_" })
-        Set-Content $ledgerFile $keep
-    }
+    try { Add-UploadLedger $stateDir $root $rels }
     catch { Write-Log "WARN ledger update failed: $($_.Exception.Message)" }
 }
 
@@ -282,6 +273,11 @@ try {
             }
             elseif ($src -eq "fswRenamed") {
                 $oldRel = $ea.OldFullPath.Substring($root.Length + 1)
+                # bisync parking a conflict loser (X -> X.conflictN): it has
+                # already settled both sides. Replaying the rename in the
+                # cloud would move the WINNER onto the conflict name and seed
+                # a conflict on the conflict file (conflict-names.ps1).
+                if (Test-ConflictLoserRename $oldRel $rel) { continue }
                 $oldOk = -not (Test-Excluded $rules $oldRel)
                 $newOk = -not (Test-Excluded $rules $rel)
                 if ($oldOk -and $oldRel -like "*.partial") { $oldOk = $false }   # rclone download temp -> plain create

@@ -21,6 +21,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "config.ps1")
+. (Join-Path $PSScriptRoot "conflict-names.ps1")
 $root = $DriveSyncConfig.LocalRoot
 $stateDir = $DriveSyncConfig.StateDir
 $sweepLog = Join-Path $stateDir "conflicts.log"
@@ -30,12 +31,7 @@ if (-not (Test-Path -LiteralPath $LogFile)) { Write-Host "sweep: log not found: 
 # collect the loser paths this run created (both sides can lose)
 $rels = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($line in Get-Content -LiteralPath $LogFile -ErrorAction SilentlyContinue) {
-    if ($line -notmatch 'Renaming Path[12] copy\s+-\s+(.+\.conflict\d+)\s*$') { continue }
-    $p = $Matches[1].Trim()
-    if ($p -match '^[^:]+:(.*)$') { $p = $Matches[1] }                    # remote form gdrive{...}:/rel
-    $p = $p -replace '/', '\'
-    if ($p.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) { $p = $p.Substring($root.Length) }
-    $p = $p.TrimStart('\')
+    $p = Get-ConflictLoserRel $line $root
     if ($p) { [void]$rels.Add($p) }
 }
 if ($rels.Count -eq 0) { exit 0 }
