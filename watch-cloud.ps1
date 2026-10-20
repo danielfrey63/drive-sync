@@ -43,6 +43,8 @@ $remoteName = $DriveSyncConfig.RemoteName
 if ($PollSeconds -le 0) { $PollSeconds = $DriveSyncConfig.PollSeconds }
 $stateDir = $DriveSyncConfig.StateDir
 $logFile = Join-Path $stateDir "cloud-watcher.log"
+# FATAL line for the watchdog's crash-loop alert (see watch-drive.ps1)
+trap { try { Add-Content $logFile "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') FATAL: $($_.Exception.Message)" } catch {}; break }
 $statusFile = Join-Path $stateDir "cloud-watcher-status.json"
 $lockFile = Join-Path $stateDir "cloud-watcher.lock"
 $tokenFile = Join-Path $stateDir "cloud-watcher-pagetoken.txt"

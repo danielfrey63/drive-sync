@@ -1,0 +1,10 @@
+# This clone lives inside the Drive corpus: Drive delivers its files to the
+# second machine AND a git pull there writes them again. Both copies must be
+# byte-identical, or bisync sees "changed on both sides" and parks one as
+# .conflictN - on 2026-10-09 that took upload-ledger.ps1 and conflict-names.ps1
+# away from this machine (LF here, CRLF from the pull on the P16) and both
+# watchers crash-looped once restarted. Fixed line endings make every
+# checkout identical, independent of core.autocrlf.
+* text=auto eol=crlf
+*.png binary
+*.jpg binary

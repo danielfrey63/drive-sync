@@ -33,6 +33,16 @@ $DriveSyncConfig = @{
     # Drive Changes API poll interval of the cloud watcher (seconds)
     PollSeconds   = 60
 
+    # toast alerts (notify.ps1): the same alert repeats at most every N hours
+    AlertRepeatHours = 12
+    # a nightly run that fails without needing a resync (e.g. a transient
+    # network error, retried next night) alerts only once the last success
+    # is older than this
+    AlertStaleSyncHours = 36
+    # the watchdog alerts once a watcher needed this many restarts within
+    # an hour (it dies right after start - missing file, parse error, ...)
+    AlertWatcherRestarts = 3
+
     # daily start time of the reconciliation bisync ("HH:mm"); a full run
     # lists both sides completely, so pick a quiet slot
     BisyncDailyAt = "04:00"

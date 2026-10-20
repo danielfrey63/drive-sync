@@ -1,3 +1,7 @@
+| `alerts.json`, `alerts.log` | last firing time per alert key (re-armed by recovery); every alert raised |
+| `watchdog-restarts.json` | restart times per watcher within the last hour (crash-loop detection) |
+| `notify.ps1` | toast alerts that stay in the Action Center (via `ai-toolbox\tools\notify\toast.ps1`), one per condition every `AlertRepeatHours`: bisync needs a resync, bisync failing longer than `AlertStaleSyncHours`, local root unwritable, resync guard failed, a watcher crash-looping (`AlertWatcherRestarts` restarts within an hour, with the cause) |
+| `test-alerts.ps1` | tests for `notify.ps1`; `-Live` shows one real test toast |
 <div align="center">
 
 # drive-sync
@@ -134,6 +138,8 @@ Every machine keeps its own bisync listings, locks, ledger and Changes cursor, s
 
 Also: unlock BitLocker data drives automatically (`Enable-BitLockerAutoUnlock -MountPoint D:`, drive must be unlocked to run it) — a scheduled run against a locked drive aborts critically after grinding through every file; the root guard in `sync-drive.ps1` now waits up to 4 h for the drive instead. And `.git` directories are excluded from the corpus, so repos on the second machine need `git init -b main` + remote + `git reset --hard <remote>/main` once.
 
+And this repository itself lives inside the corpus: Drive delivers its files to the second machine, and a `git pull` there writes them a second time. `.gitattributes` pins the line endings so both copies are byte-identical (on 2026-10-09 an LF/CRLF mismatch let bisync park two watcher modules as `.conflictN`; both watchers crash-looped once restarted). Still prefer `git fetch` + `git reset --soft origin/main` over `git pull` on the second machine: it moves HEAD without touching files Drive has already delivered. Watchers load their code only at start, so run `restart-watchers.ps1` after either.
+
 <details>
 <summary><b>State files reference</b></summary>
 
@@ -244,4 +250,4 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 
 ## License
 
-[MIT](LICENSE)
+| `watchdog.ps1` | restarts silently died watchers every 15 min; alerts when one keeps dying right after start |

@@ -43,6 +43,7 @@ $lockFile = Join-Path $stateDir "sync.lock"
 $statusFile = Join-Path $stateDir "status.json"
 New-Item -ItemType Directory -Force $logDir | Out-Null
 . (Join-Path $PSScriptRoot "bisync-index.ps1")
+. (Join-Path $PSScriptRoot "notify.ps1")
 
 # --- local root guard -------------------------------------------------------
 # Never let bisync loose on a root that is not writable: on 2026-09-21 a run
@@ -61,6 +62,8 @@ while ($true) {
     } catch {
         if ((Get-Date) -gt $guardDeadline) {
             Write-Warning "local root '$localPath' stayed unwritable for 4h (BitLocker locked? not mounted?) - refusing to run: $_"
+            Send-DriveSyncAlert -Key "bisync-root" -Title "Drive-Sync: Nachtlauf übersprungen" `
+                -Body "$localPath war 4 Stunden lang nicht beschreibbar (BitLocker gesperrt, Laufwerk nicht eingehängt?)." | Out-Null
             exit 2
         }
         Start-Sleep -Seconds 60
@@ -104,6 +107,8 @@ try {
         & pwsh -NoProfile -File (Join-Path $PSScriptRoot "resync-guard.ps1") -DryRun:$DryRun -LogFile $logFile
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "resync guard failed (exit $LASTEXITCODE) - refusing to resync blind; see $logFile or use -SkipResyncGuard"
+            Send-DriveSyncAlert -Key "resync-guard" -Force -Title "Drive-Sync: Resync abgebrochen" `
+                -Body "Der Resync-Guard konnte den Drive-Papierkorb nicht prüfen. Log: $logFile" | Out-Null
             exit 2
         }
     }
@@ -206,6 +211,38 @@ try {
     # log rotation: keep the newest 30
     Get-ChildItem $logDir -Filter "bisync-*.log" | Sort-Object Name -Descending |
         Select-Object -Skip 30 | Remove-Item -Force -Confirm:$false
+
+    # --- alerts --------------------------------------------------------------
+    # 2026-10-09..20: eleven nights of "Must run --resync", nobody noticed.
+    # A run that needs a resync alerts at once; any other failure (retryable
+    # under --resilient, e.g. a DNS hiccup) only once the last success is
+    # older than AlertStaleSyncHours. A success re-arms both.
+    if (-not $DryRun) {
+        if ($exit -eq 0) {
+            Clear-DriveSyncAlert "bisync-resync"
+            Clear-DriveSyncAlert "bisync-failed"
+            Clear-DriveSyncAlert "bisync-root"
+        }
+        else {
+            $since = if ($newStatus.lastSuccess) { ([datetime]$newStatus.lastSuccess.end).ToString("dd.MM. HH:mm") } else { "nie" }
+            $needsResync = Select-String -LiteralPath $logFile -Pattern 'Must run --resync' -Quiet -ErrorAction SilentlyContinue
+            if ($needsResync) {
+                $cause = Select-String -LiteralPath $logFile -Pattern 'Bisync critical error: (.+)$' -ErrorAction SilentlyContinue |
+                    Select-Object -First 1 | ForEach-Object { $_.Matches[0].Groups[1].Value }
+                if ($cause.Length -gt 160) { $cause = $cause.Substring(0, 160) + "…" }
+                Send-DriveSyncAlert -Key "bisync-resync" -Title "Drive-Sync: Resync nötig" `
+                    -Body "Letzter erfolgreicher Abgleich: $since. Ursache: $cause. Beheben: sync-drive.ps1 -Resync -ResyncMode newer" | Out-Null
+            }
+            else {
+                $staleH = if ($DriveSyncConfig.AlertStaleSyncHours) { [double]$DriveSyncConfig.AlertStaleSyncHours } else { 36 }
+                $lastOk = if ($newStatus.lastSuccess) { [datetime]$newStatus.lastSuccess.end } else { [datetime]::MinValue }
+                if (((Get-Date) - $lastOk).TotalHours -ge $staleH) {
+                    Send-DriveSyncAlert -Key "bisync-failed" -Title "Drive-Sync: Nachtlauf scheitert" `
+                        -Body "Exit $exit, letzter erfolgreicher Abgleich: $since. Log: $logFile" | Out-Null
+                }
+            }
+        }
+    }
 
     if ($exit -ne 0) { Write-Warning "bisync failed with exit code $exit - see $logFile" }
     else { Write-Host "bisync ok ($($run.minutes) min) - log: $logFile" }

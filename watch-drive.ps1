@@ -33,6 +33,11 @@ $remote = $DriveSyncConfig.Remote
 $filters = Join-Path $PSScriptRoot "filters.txt"
 $stateDir = $DriveSyncConfig.StateDir
 $logFile = Join-Path $stateDir "watcher.log"
+# A crash outside the loop's own error handling (a missing module, a parse
+# error in a dot-sourced file) used to leave no trace: the watchdog saw only a
+# dead PID and restarted the task every 15 min for hours (2026-10-20). The
+# FATAL line is what the watchdog quotes in its alert.
+trap { try { Add-Content $logFile "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') FATAL: $($_.Exception.Message)" } catch {}; break }
 $statusFile = Join-Path $stateDir "watcher-status.json"
 $lockFile = Join-Path $stateDir "watcher.lock"
 $bisyncLock = Join-Path $stateDir "sync.lock"
