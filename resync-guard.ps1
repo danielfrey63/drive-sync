@@ -19,6 +19,10 @@
 # retention (30 days); older stale copies still need a manual
 # "rclone check <local> gdrive: --one-way --missing-on-dst".
 #
+# Before that, step 0 carries out the local deletes the upload watcher only
+# journalled (beyond its MaxDeletes cap, for a nightly run that never came):
+# they are in no trash, so the rule above cannot see them.
+#
 # Usage:
 #   pwsh -File resync-guard.ps1            # act
 #   pwsh -File resync-guard.ps1 -DryRun    # report only
@@ -63,6 +67,80 @@ function Write-Log([string]$msg) {
     Write-Host $line
     Add-Content $LogFile $line -ErrorAction SilentlyContinue
 }
+
+# --- 0. local deletes the upload watcher deferred (delete journal, path1) ----
+# Deletes beyond the watcher's MaxDeletes cap are journalled for the nightly
+# bisync instead of executed. If that bisync is blocked, they never reach the
+# cloud and are in no trash - the tombstone rule below cannot see them, and a
+# resync downloads every one of them again (84 files on 2026-10-20, journalled
+# 09.-11.10. while the nightly run needed a resync). Carry them out first, but
+# only where it is still the same file: local path gone (not recreated) and
+# the cloud copy not newer than the delete (1s slack) - a copy changed in the
+# cloud after our delete is somebody's newer work and stays.
+. (Join-Path $PSScriptRoot "delete-journal.ps1")
+. (Join-Path $PSScriptRoot "upload-ledger.ps1")   # ConvertTo-UploadLedgerTime
+function Get-RemotePath([string]$rel) { if ($remote.EndsWith(':')) { "$remote$rel" } else { "$remote/$rel" } }
+
+$stateDir = $DriveSyncConfig.StateDir
+# a scoped run only peeks: claiming would take the entries of every other
+# subtree with it, and the clear at the end would drop them
+$consume = -not $DryRun -and -not $Scope
+$journal = @(Read-DroppedDeletes $stateDir "path1" -Claim:$consume -MaxAgeDays 30)
+$prefix = if ($Scope) { "$Scope/" } else { "" }
+$pendingDel = @{}   # rel (within scope, "/") -> unix time of the local delete
+foreach ($e in $journal) {
+    if ($prefix -and -not $e.Rel.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+    $r = $e.Rel.Substring($prefix.Length)
+    if (-not $r -or (Test-Path -LiteralPath (Join-Path $root ($r -replace '/', '\')))) { continue }   # recreated locally
+    $pendingDel[$r] = $e.Time
+}
+if ($pendingDel.Count -gt 0) {
+    $cloud = [System.Collections.Generic.List[object]]::new()   # @{ Rel; M; Entry }
+    # A journal entry is a file or the root of a deleted tree, and the local
+    # side can no longer tell which. One listing per parent folder answers it
+    # for all siblings at once (--files-from-raw aborts on a folder entry).
+    $byParent = $pendingDel.Keys | Group-Object { $i = $_.LastIndexOf('/'); if ($i -lt 0) { "" } else { $_.Substring(0, $i) } }
+    foreach ($grp in $byParent) {
+        $parent = $grp.Name
+        $lsRaw = & $rcloneExe lsjson $(if ($parent) { Get-RemotePath $parent } else { $remote }) @($DriveSyncConfig.Pacer) 2>&1
+        if ($LASTEXITCODE -eq 3) { continue }   # parent gone in the cloud too: nothing left to delete there
+        if ($LASTEXITCODE -ne 0) { Write-Log "journal check failed for $parent (exit $LASTEXITCODE): $(($lsRaw | Select-Object -Last 1))"; exit 2 }
+        $items = @{}
+        foreach ($o in @((($lsRaw -join "`n") | ConvertFrom-Json))) { if ($o) { $items[$o.Name] = $o } }
+        foreach ($entry in $grp.Group) {
+            $leaf = if ($parent) { $entry.Substring($parent.Length + 1) } else { $entry }
+            if (-not $items.ContainsKey($leaf)) { continue }   # already gone in the cloud
+            $it = $items[$leaf]
+            if (-not $it.IsDir) { $cloud.Add(@{ Rel = $entry; M = (ConvertTo-UploadLedgerTime $it.ModTime); Entry = $entry }); continue }
+            $treeRaw = & $rcloneExe lsjson (Get-RemotePath $entry) -R --files-only @($DriveSyncConfig.Pacer) 2>&1
+            if ($LASTEXITCODE -ne 0) { Write-Log "journal check failed for folder $entry (exit $LASTEXITCODE)"; exit 2 }
+            foreach ($o in @((($treeRaw -join "`n") | ConvertFrom-Json))) {
+                if ($o) { $cloud.Add(@{ Rel = "$entry/$($o.Path)"; M = (ConvertTo-UploadLedgerTime $o.ModTime); Entry = $entry }) }
+            }
+        }
+    }
+    $tmpJ = Join-Path ([IO.Path]::GetTempPath()) "resync-guard-journal.txt"
+    $toDelete = [System.Collections.Generic.List[string]]::new()
+    $keptNewer = 0
+    foreach ($c in $cloud) {
+        if (Test-Path -LiteralPath (Join-Path $root ($c.Rel -replace '/', '\'))) { continue }
+        if ($null -ne $c.M -and $c.M -le $pendingDel[$c.Entry] + 1) { $toDelete.Add($c.Rel) }
+        else { $keptNewer++; Write-Log "journal: kept, changed in the cloud after the local delete: $($c.Rel)" }
+    }
+    Write-Log "delete journal: $($pendingDel.Count) deferred local delete(s), $($toDelete.Count) still in the cloud and unchanged, $keptNewer changed since"
+    if ($toDelete.Count -gt 0) {
+        if ($DryRun) { $toDelete | ForEach-Object { Write-Log "DRYRUN would trash in the cloud: $_" } }
+        else {
+            Set-Content $tmpJ $toDelete -Encoding utf8NoBOM
+            $delRaw = & $rcloneExe delete $remote --files-from-raw $tmpJ --no-traverse @($DriveSyncConfig.Pacer) 2>&1
+            if ($LASTEXITCODE -ne 0) { Write-Log "journal deletes failed (exit $LASTEXITCODE): $(($delRaw | Select-Object -Last 1))"; exit 2 }
+            Write-Log "journal: trashed $($toDelete.Count) file(s) in the cloud"
+        }
+    }
+}
+else { Write-Log "delete journal: nothing deferred" }
+# the claimed batch is settled (never claimed under -DryRun or -Scope)
+if ($consume -and $journal.Count -gt 0) { Clear-DroppedDeletes $stateDir "path1" }
 
 # --- 1. trashed cloud files: path|modtime -----------------------------------
 # --fast-list: one flat query instead of walking every folder of the corpus

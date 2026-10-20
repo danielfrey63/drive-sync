@@ -64,7 +64,11 @@ function Add-DroppedDeletes([string]$stateDir, [string]$side, [string[]]$rels) {
 # journal and its entries survive; plain read-then-clear would drop them.
 # Without -Claim nothing is moved and both files are read - a peek at everything
 # still pending, including a batch a dead consumer left behind.
-function Read-DroppedDeletes([string]$stateDir, [string]$side, [switch]$Claim) {
+# -MaxAgeDays overrides the read cut-off for a caller that re-checks every
+# entry against the file systems anyway (resync-guard.ps1): after a critical
+# abort the splice report finds no baseline and leaves the journal alone, so a
+# blocked chain can easily outlive the 7 days.
+function Read-DroppedDeletes([string]$stateDir, [string]$side, [switch]$Claim, [int]$MaxAgeDays = 0) {
     try {
         $file = Get-DeleteJournalPath $stateDir $side
         # NOT $claim: PowerShell variables are case-insensitive, so that name
@@ -82,7 +86,8 @@ function Read-DroppedDeletes([string]$stateDir, [string]$side, [switch]$Claim) {
             else { Move-Item -LiteralPath $file -Destination $claimFile -Force }
         }
         $sources = if ($Claim) { @($claimFile) } else { @($file, $claimFile) }
-        $cut = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - ($script:JournalMaxAgeDays * 86400)
+        $ageDays = if ($MaxAgeDays -gt 0) { $MaxAgeDays } else { $script:JournalMaxAgeDays }
+        $cut = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - ($ageDays * 86400)
         # EARLIEST timestamp wins on a duplicate: the time is what a later step
         # measures a foreign change against, and the first delete attempt is the
         # conservative bound - a change after it must be noticed, not swallowed
