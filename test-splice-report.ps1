@@ -64,6 +64,12 @@ Write-Host "   schon in Baseline:  $($m2.InBaseline)"
 $okB = $m2.InBaseline -eq 1 -and $m2.Ready.Count -eq 0
 Write-Host "$(if ($okB) { 'PASS' } else { 'FAIL' }) - erwartet in der Baseline gefunden, nichts zu spleissen"
 
+# cloud deleted, mirror lost it too: settled, counted as such - not as "back
+# on disk", which is what the shared counter reported until 2026-10-22
+$m3 = Measure-SpliceCandidates $localPath $listings "path2" @("Agile Lean Teal/SAFe/__does-not-exist-anywhere__.zip")
+$okC = $m3.GoneLocally -eq 1 -and $m3.Recreated -eq 0 -and $m3.Ready.Count -eq 0
+Write-Host "$(if ($okC) { 'PASS' } else { 'FAIL' }) - path2, lokal auch weg: erwartet 1 x lokal weg, 0 x wieder da (ist: $($m3.GoneLocally) / $($m3.Recreated))"
+
 # and the journal round-trip, in a scratch dir so the real one is untouched
 $tmp = Join-Path ([IO.Path]::GetTempPath()) "drive-sync-journal-test"
 New-Item -ItemType Directory -Force $tmp | Out-Null

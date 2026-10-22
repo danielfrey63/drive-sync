@@ -85,15 +85,20 @@ function Measure-SpliceCandidates([string]$localRoot, $listings, [string]$side, 
     $ready = [System.Collections.Generic.List[string]]::new()
     $inBaseline = 0
     $recreated = 0
+    $goneLocally = 0
     $unsafeName = [System.Collections.Generic.List[string]]::new()
 
     foreach ($c in $candidates) {
         $abs = Join-Path $localRoot ($c -replace '/', '\')
         $localHere = Test-Path -LiteralPath $abs
-        # the side that deleted must really be missing it now; if it is back,
-        # the journal entry is stale and splicing it would order a live delete
+        # path1 deleted locally: if the file is back on disk, the journal entry
+        # is stale and splicing it would order a live delete
         if ($side -eq "path1" -and $localHere) { $recreated++; continue }
-        if ($side -eq "path2" -and -not $localHere) { $recreated++; continue }
+        # path2 deleted in the cloud: a mirror without the file is settled,
+        # nothing to splice. Counted on its own - sharing the "back on disk"
+        # counter reported 132 resurrections on 2026-10-21 for 132 files that
+        # were gone everywhere.
+        if ($side -eq "path2" -and -not $localHere) { $goneLocally++; continue }
         # present in a baseline means bisync already sees the deletion correctly
         if ($in1.Contains($c) -or $in2.Contains($c)) { $inBaseline++; continue }
         if (-not (Test-SpliceSafeName $c)) { $unsafeName.Add($c); continue }
@@ -106,6 +111,7 @@ function Measure-SpliceCandidates([string]$localRoot, $listings, [string]$side, 
         Ready      = $ready
         InBaseline = $inBaseline
         Recreated  = $recreated
+        GoneLocally = $goneLocally
         UnsafeName = $unsafeName
     }
 }
@@ -214,9 +220,9 @@ function Write-SpliceReport([string]$localRoot, [string]$remote, [string]$stateD
         # so without them only the second literal would be formatted
         & $say ((
                 "splice report {0}{6}: {1} journalled - {2} would be spliced, " +
-                "{3} already in the baseline, {4} back on disk, {5} unsafe name"
+                "{3} already in the baseline, {4} back on disk, {7} already gone locally, {5} unsafe name"
             ) -f $side, $m.Total, $m.Ready.Count, $m.InBaseline, $m.Recreated, $m.UnsafeName.Count,
-            $(if ($Peek) { " (dry run, journal kept)" } else { "" }))
+            $(if ($Peek) { " (dry run, journal kept)" } else { "" }), $m.GoneLocally)
         & $say ("    metadata: {0} usable, {1} gone from both sides, {2} changed since the delete{3}" `
                 -f $meta.Count, $gone, $conflict, $(if ($capped) { " (capped at $maxSplice)" } else { "" }))
         foreach ($p in @($meta.Keys | Select-Object -First 5)) { & $say "    would splice: $p" }
