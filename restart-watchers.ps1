@@ -14,10 +14,14 @@
 #   pwsh -File restart-watchers.ps1          both watchers
 #   pwsh -File restart-watchers.ps1 -Up      upload watcher only
 #   pwsh -File restart-watchers.ps1 -Down    cloud watcher only
+#   -ReadyTimeoutSec 0                       do not wait for the catch-up
 
 param(
     [switch]$Up,
-    [switch]$Down
+    [switch]$Down,
+    # the upload watcher lists the whole corpus before its main loop runs
+    # (start-up catch-up, ~2-3 min); 0 returns as soon as the PID is up
+    [int]$ReadyTimeoutSec = 300
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,8 +29,10 @@ $ErrorActionPreference = "Stop"
 
 $stateDir = $DriveSyncConfig.StateDir
 $all = @(
-    @{ Name = "DriveSync watcher"; Lock = "watcher.lock"; Pick = $Up }
-    @{ Name = "DriveSync cloud watcher"; Lock = "cloud-watcher.lock"; Pick = $Down }
+    # Ready: the log line that ends start-up. The cloud watcher polls right
+    # away, so its PID is the whole story.
+    @{ Name = "DriveSync watcher"; Lock = "watcher.lock"; Log = "watcher.log"; Pick = $Up; Ready = '^\S+ \S+ (catch-up|WARN catch-up failed)' }
+    @{ Name = "DriveSync cloud watcher"; Lock = "cloud-watcher.lock"; Log = "cloud-watcher.log"; Pick = $Down; Ready = $null }
 )
 # no switch given means both
 $watchers = if ($Up -or $Down) { @($all | Where-Object { $_.Pick }) } else { $all }
@@ -72,6 +78,29 @@ foreach ($w in $watchers) {
         if ($proc -or (Get-Date) -ge $deadline) { break }
         Start-Sleep -Milliseconds 500
     }
+    $w.NewPid = if ($proc) { $new }
     if ($proc) { Write-Host "$($w.Name): running as PID $new (since $($proc.StartTime.ToString('HH:mm:ss')))" }
-    else { Write-Host "$($w.Name): NOT RUNNING after 30 s - check $(Join-Path $stateDir $w.Lock.Replace('.lock', '.log'))" }
+    else { Write-Host "$($w.Name): NOT RUNNING after 30 s - check $(Join-Path $stateDir $w.Log)" }
+}
+
+# A live PID is not a working watcher yet: on 2026-10-22 the upload watcher
+# spent 3 minutes in its catch-up listing after the restart, and a test file
+# written meanwhile seemed to be ignored. FSW events queue up during that time
+# and nothing is lost - but whoever restarts should know when the main loop
+# runs. Only lines after this PID's own "started" line count.
+foreach ($w in @($watchers | Where-Object { $_.NewPid -and $_.Ready -and $ReadyTimeoutSec -gt 0 })) {
+    $log = Join-Path $stateDir $w.Log
+    $since = Get-Date
+    $deadline = $since.AddSeconds($ReadyTimeoutSec)
+    $hit = $null
+    while (-not $hit -and (Get-Date) -lt $deadline) {
+        $tail = @(Get-Content $log -Tail 400 -ErrorAction SilentlyContinue)
+        $start = -1
+        for ($i = $tail.Count - 1; $i -ge 0; $i--) { if ($tail[$i] -match "started \(PID $($w.NewPid)\)") { $start = $i; break } }
+        if ($start -ge 0) { $hit = $tail[($start + 1)..($tail.Count)] | Where-Object { $_ -match $w.Ready } | Select-Object -First 1 }
+        if (-not $hit) { Start-Sleep -Seconds 2 }
+    }
+    $secs = [int]((Get-Date) - $since).TotalSeconds
+    if ($hit) { Write-Host "$($w.Name): ready after $secs s - $(($hit -split ' ', 3)[2])" }
+    else { Write-Host "$($w.Name): still in start-up after $secs s - events queue meanwhile, nothing is lost; see $log" }
 }
