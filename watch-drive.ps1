@@ -139,6 +139,22 @@ $uploadedTotal = 0
 $renamedTotal = 0
 $deletedTotal = 0
 
+# A pending upload follows its file through a rename. Otherwise the flush finds
+# the old path gone, drops it, and the server-side move carries the cloud's
+# STALE content to the new name: on 2026-10-21 a mail draft was saved at
+# 10:15:38 and renamed at 10:15:39 - the cloud kept the 10:11 version until the
+# nightly bisync parked it as .conflict1. Covers folder renames by prefix.
+function Move-PendingPaths([string]$oldRel, [string]$newRel) {
+    $prefix = "$oldRel\"
+    foreach ($p in @($pending)) {
+        if ($p -ieq $oldRel) { $moved = $newRel }
+        elseif ($p.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { $moved = $newRel + $p.Substring($oldRel.Length) }
+        else { continue }
+        [void]$pending.Remove($p)
+        [void]$pending.Add($moved)
+    }
+}
+
 function Add-PendingPath([string]$abs, [string]$rel) {
     if ([string]::IsNullOrWhiteSpace($rel)) {
         # phantom event for the watch root itself (seen twice on 2026-08-12,
@@ -287,6 +303,7 @@ try {
                 $newOk = -not (Test-Excluded $rules $rel)
                 if ($oldOk -and $oldRel -like "*.partial") { $oldOk = $false }   # rclone download temp -> plain create
                 if ($oldOk) { $intent.Add($oldRel) }
+                if ($newOk) { Move-PendingPaths $oldRel $rel }
                 if ($oldOk -and $newOk) { $renames.Add([pscustomobject]@{ Old = $oldRel; New = $rel }) }
                 elseif ($oldOk) { [void]$deletes.Add($oldRel) }   # renamed INTO an excluded name
                 elseif ($newOk) { Add-PendingPath $path $rel }    # renamed OUT of an excluded/temp name
