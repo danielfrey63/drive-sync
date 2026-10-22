@@ -166,7 +166,7 @@ try {
                     }
                     if ($isFolder) {
                         # keep the cache fresh; renamed dirs themselves are bisync's job
-                        $dirCache[$f.id] = @{ Name = $f.name; Parent = @($f.parents)[0] }
+                        $dirCache[$f.id] = New-FolderInfo $f
                         # remember genuinely new cloud folders (see $newDirs above)
                         try {
                             if ($f.createdTime -and ((Get-Date) - [datetime]$f.createdTime).TotalHours -lt 1) {

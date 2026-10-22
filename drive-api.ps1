@@ -50,10 +50,19 @@ function Invoke-Drive([string]$pathAndQuery) {
 }
 
 # --- path resolution via parent-chain walk with cache -----------------------
+# A Drive name may contain "/", a path segment may not: rclone shows it as
+# U+FF0F, and that is also the name the local mirror carries. Applied to every
+# segment, folders included - otherwise "A/B" as one folder name would read as
+# two levels.
+function ConvertTo-RcloneName([string]$name) { $name.Replace('/', [string][char]0xFF0F) }
+
+# the dirCache entry for a folder object from any API response
+function New-FolderInfo($f) { @{ Name = ConvertTo-RcloneName $f.name; Parent = @($f.parents)[0] } }
+
 function Get-FolderInfo([string]$id) {
     if ($script:dirCache.ContainsKey($id)) { return $script:dirCache[$id] }
     $f = Invoke-Drive "files/$([uri]::EscapeDataString($id))?fields=id,name,parents"
-    $info = @{ Name = $f.name; Parent = @($f.parents)[0] }
+    $info = New-FolderInfo $f
     $script:dirCache[$id] = $info
     return $info
 }
@@ -78,12 +87,13 @@ function Resolve-RelPath($file) {
     if (-not $parent) { return $null }
     $dir = Resolve-RelDir $parent
     if ($null -eq $dir) { return $null }
-    if ($dir) { return "$dir\$($file.name)" } else { return $file.name }
+    $name = ConvertTo-RcloneName $file.name
+    if ($dir) { return "$dir\$name" } else { return $name }
 }
 
 # --- the trash ---------------------------------------------------------------
 # Every trashed file below My Drive, as rclone would name it: "/" separators,
-# a "/" inside a name as U+FF0F, modtime in local time truncated to seconds
+# a "/" inside a name as U+FF0F (ConvertTo-RcloneName), modtime in local time truncated to seconds
 # (the "t" column of rclone lsf). Google-native documents are left out, like
 # --drive-skip-gdocs in the bisync - they have no local twin.
 #
@@ -103,7 +113,7 @@ function Get-DriveTrashedFiles {
         $resp = Invoke-Drive $url
         foreach ($f in @($resp.files)) {
             if ($f.mimeType -eq "application/vnd.google-apps.folder") {
-                $script:dirCache[$f.id] = @{ Name = $f.name; Parent = @($f.parents)[0] }
+                $script:dirCache[$f.id] = New-FolderInfo $f
             }
             elseif ($f.mimeType -notlike "application/vnd.google-apps.*") { $items.Add($f) }
         }
@@ -111,12 +121,9 @@ function Get-DriveTrashedFiles {
     } while ($token)
 
     foreach ($f in $items) {
-        $parent = @($f.parents)[0]
-        if (-not $parent) { continue }
-        $dir = Resolve-RelDir $parent
-        if ($null -eq $dir) { continue }
-        $name = $f.name.Replace('/', [string][char]0xFF0F)
-        $rel = if ($dir) { ($dir -replace '\\', '/') + "/" + $name } else { $name }
+        $rel = Resolve-RelPath $f
+        if ($null -eq $rel) { continue }
+        $rel = $rel -replace '\\', '/'
         $t = ([datetime]$f.modifiedTime).ToLocalTime()
         [pscustomobject]@{
             Rel     = $rel

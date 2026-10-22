@@ -42,6 +42,7 @@ param(
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "config.ps1")
 . (Join-Path $PSScriptRoot "recycle-bin.ps1")
+. (Join-Path $PSScriptRoot "notify.ps1")
 $root = $DriveSyncConfig.LocalRoot
 $remote = $DriveSyncConfig.Remote
 if ($Scope) {
@@ -166,9 +167,14 @@ try {
         if (Test-Excluded $rules ($f.Rel -replace '/', '\')) { continue }
         Add-Tombstone $f.Rel.Substring($prefix.Length) $f.ModTime
     }
+    Clear-DriveSyncAlert -Key "resync-guard-fallback"
 }
 catch {
     Write-Log "drive api trash listing failed: $($_.Exception.Message) - falling back to rclone (slow)"
+    # the resync still runs, but ~90 min later than it should - and a broken
+    # API path would stay unnoticed in a log nobody reads
+    Send-DriveSyncAlert -Key "resync-guard-fallback" -Title "Drive-Sync: Resync-Guard langsam" `
+        -Body "Drive-API nicht erreichbar ($($_.Exception.Message)), der Papierkorb wird per rclone gelesen (~90 min). Log: $LogFile" | Out-Null
     $trash.Clear()
     $trashSource = "rclone"
     # --fast-list: one flat query instead of walking every folder of the corpus

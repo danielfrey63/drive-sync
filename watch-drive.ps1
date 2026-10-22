@@ -256,10 +256,9 @@ try {
     if (Test-Path $lastSeenFile) {
         try { $lastSeen = [datetime]::Parse((Get-Content $lastSeenFile -TotalCount 1), $null, [System.Globalization.DateTimeStyles]::RoundtripKind) } catch {}
     }
-    $bisyncPid = Get-Content $bisyncLock -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($bisyncPid -and (Get-Process -Id $bisyncPid -ErrorAction SilentlyContinue)) {
+    if (Test-BisyncRunning) {
         # stamp untouched: the bisync reconciles the gap, the heartbeat takes over
-        Write-Log "catch-up skipped: bisync (PID $bisyncPid) is running and reconciles the gap"
+        Write-Log "catch-up skipped: bisync (PID $(Get-Content $bisyncLock -TotalCount 1)) is running and reconciles the gap"
     }
     elseif ($null -eq $lastSeen) {
         Write-Log "catch-up skipped: no liveness stamp yet (first run)"

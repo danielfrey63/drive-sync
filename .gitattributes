@@ -6,5 +6,7 @@
 # watchers crash-looped once restarted. Fixed line endings make every
 # checkout identical, independent of core.autocrlf.
 * text=auto eol=crlf
+# shell scripts run in sh, which chokes on CR
+*.sh text eol=lf
 *.png binary
 *.jpg binary
