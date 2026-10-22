@@ -138,7 +138,7 @@ Every machine keeps its own bisync listings, locks, ledger and Changes cursor, s
 
 Also: unlock BitLocker data drives automatically (`Enable-BitLockerAutoUnlock -MountPoint D:`, drive must be unlocked to run it) — a scheduled run against a locked drive aborts critically after grinding through every file; the root guard in `sync-drive.ps1` now waits up to 4 h for the drive instead. And `.git` directories are excluded from the corpus, so repos on the second machine need `git init -b main` + remote + `git reset --hard <remote>/main` once.
 
-And this repository itself lives inside the corpus: Drive delivers its files to the second machine, and a `git pull` there writes them a second time. `.gitattributes` pins the line endings so both copies are byte-identical (on 2026-10-09 an LF/CRLF mismatch let bisync park two watcher modules as `.conflictN`; both watchers crash-looped once restarted). Still prefer `git fetch` + `git reset --soft origin/main` over `git pull` on the second machine: it moves HEAD without touching files Drive has already delivered. Watchers load their code only at start, so run `restart-watchers.ps1` after either.
+And this repository itself lives inside the corpus: Drive delivers its files to the second machine, and a `git pull` there writes them a second time. `.gitattributes` pins the line endings so both copies are byte-identical (on 2026-10-09 an LF/CRLF mismatch let bisync park two watcher modules as `.conflictN`; both watchers crash-looped once restarted). Still prefer `git fetch` + `git reset --soft origin/main` over `git pull` on the second machine: it moves HEAD without touching files Drive has already delivered. Watchers load their code only at start, so run `restart-watchers.ps1` after either. It returns once the upload watcher has finished its start-up catch-up (2–3 min), not merely when its process is up.
 
 <details>
 <summary><b>State files reference</b></summary>
@@ -240,6 +240,7 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 | `upload-ledger.ps1` | echo control between the watchers: own uploads with modtime and size |
 | `conflict-names.ps1` | recognises bisync's `.conflictN` losers: the upload watcher never replays that rename, `sweep-conflicts.ps1` moves the losers out of the corpus |
 | `test-conflict-chain.ps1` | tests for the two modules above (no cloud access) |
+| `test-pending-rename.ps1` | an upload pending when its file or folder is renamed follows the new name; `-Live` runs it against the watcher and the cloud in `Temp\` |
 | `run-hidden.vbs` | windowless task launcher (no console window flashing) |
 | `install-sync-task.ps1`, `install-watcher-task.ps1` | register the scheduled tasks (idempotent) |
 | `uninstall.ps1` | stops the watchers and removes all four tasks (`-RemoveState` also deletes the state dir) |
