@@ -27,8 +27,8 @@
 #   pwsh -File resync-guard.ps1            # act
 #   pwsh -File resync-guard.ps1 -DryRun    # report only
 #   pwsh -File resync-guard.ps1 -Scope "Develop/foo" -DryRun
-#                                          # one subtree only (seconds instead
-#                                          # of the ~90 min full trash listing)
+#                                          # one subtree only (the trash is
+#                                          # still listed in full, ~75 s)
 # Called by sync-drive.ps1 -Resync; exit 0 = ok (also when nothing to do),
 # exit 2 = trash listing or live check failed (the caller refuses to resync
 # blind).
@@ -143,23 +143,49 @@ else { Write-Log "delete journal: nothing deferred" }
 if ($consume -and $journal.Count -gt 0) { Clear-DroppedDeletes $stateDir "path1" }
 
 # --- 1. trashed cloud files: path|modtime -----------------------------------
-# --fast-list: one flat query instead of walking every folder of the corpus
-$trashRaw = & $rcloneExe lsf $remote --drive-trashed-only -R --files-only --fast-list `
-    --format "pt" --separator "|" --filter-from $filters @($DriveSyncConfig.Pacer) 2>&1
-$trashExit = $LASTEXITCODE
+# One flat Drive API query (drive-api.ps1, ~75 s on 2026-10-22) instead of
+# rclone's walk through every folder (~90 min before the 2026-10-20 resync).
+# Measured against that walk on three subtrees: identical, except files
+# trashed one by one inside a folder that was trashed afterwards - the walk
+# misses those tombstones, the query has them. rclone stays as the fallback
+# when the API is unreachable.
 $trash = @{}   # rel path (/) -> list of modtimes (seconds precision)
-foreach ($line in $trashRaw) {
-    if ($line -match '^(.+)\|(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)') {
-        $p = $Matches[1]
-        if (-not $trash.ContainsKey($p)) { $trash[$p] = [System.Collections.Generic.List[datetime]]::new() }
-        $trash[$p].Add([datetime]::ParseExact($Matches[2], 'yyyy-MM-dd HH:mm:ss', $null))
+function Add-Tombstone([string]$p, [datetime]$t) {
+    if (-not $trash.ContainsKey($p)) { $trash[$p] = [System.Collections.Generic.List[datetime]]::new() }
+    $trash[$p].Add($t)
+}
+$trashSource = "drive api"
+try {
+    . (Join-Path $PSScriptRoot "drive-api.ps1")
+    . (Join-Path $PSScriptRoot "filter-rules.ps1")
+    $rules = Get-ExcludeRules $filters
+    $null = Initialize-DriveApi $rcloneExe $DriveSyncConfig.RemoteName
+    $prefix = if ($Scope) { "$Scope/" } else { "" }
+    foreach ($f in Get-DriveTrashedFiles) {
+        if ($prefix -and -not $f.Rel.StartsWith($prefix, [System.StringComparison]::Ordinal)) { continue }
+        if (Test-Excluded $rules ($f.Rel -replace '/', '\')) { continue }
+        Add-Tombstone $f.Rel.Substring($prefix.Length) $f.ModTime
     }
 }
-if ($trashExit -ne 0 -and $trash.Count -eq 0) {
-    Write-Log "trash listing failed (exit $trashExit): $(($trashRaw | Select-Object -Last 1))"
-    exit 2
+catch {
+    Write-Log "drive api trash listing failed: $($_.Exception.Message) - falling back to rclone (slow)"
+    $trash.Clear()
+    $trashSource = "rclone"
+    # --fast-list: one flat query instead of walking every folder of the corpus
+    $trashRaw = & $rcloneExe lsf $remote --drive-trashed-only -R --files-only --fast-list `
+        --format "pt" --separator "|" --filter-from $filters @($DriveSyncConfig.Pacer) 2>&1
+    $trashExit = $LASTEXITCODE
+    foreach ($line in $trashRaw) {
+        if ($line -match '^(.+)\|(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)') {
+            Add-Tombstone $Matches[1] ([datetime]::ParseExact($Matches[2], 'yyyy-MM-dd HH:mm:ss', $null))
+        }
+    }
+    if ($trashExit -ne 0 -and $trash.Count -eq 0) {
+        Write-Log "trash listing failed (exit $trashExit): $(($trashRaw | Select-Object -Last 1))"
+        exit 2
+    }
 }
-Write-Log "trash listing: $($trash.Count) path(s) (lsf exit $trashExit)"
+Write-Log "trash listing ($trashSource): $($trash.Count) path(s)"
 
 # --- 2. local twins of trashed files ------------------------------------------
 $candidates = [System.Collections.Generic.List[string]]::new()

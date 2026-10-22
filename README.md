@@ -236,6 +236,7 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 | `watch-drive.ps1` | upload watcher local → cloud (new/update/rename/delete + start-up catch-up) |
 | `watch-cloud.ps1` | download watcher cloud → local (new/update/trash); `-Once` runs a single cycle |
 | `watchdog.ps1` | restarts silently died watchers every 15 min |
+| `drive-api.ps1` | direct Drive v3 API with the rclone remote's OAuth token: path resolution for the cloud watcher, flat trash listing for the resync guard (~75 s instead of ~90 min) |
 | `filter-rules.ps1` | shared exclude logic for the watchers, derived from `filters.txt` |
 | `upload-ledger.ps1` | echo control between the watchers: own uploads with modtime and size |
 | `conflict-names.ps1` | recognises bisync's `.conflictN` losers: the upload watcher never replays that rename, `sweep-conflicts.ps1` moves the losers out of the corpus |

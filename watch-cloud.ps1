@@ -105,77 +105,12 @@ Set-Content $lockFile $PID
 . (Join-Path $PSScriptRoot "filter-rules.ps1")
 $rules = Get-ExcludeRules (Join-Path $PSScriptRoot "filters.txt")
 
-# --- OAuth: reuse the rclone remote's credentials ---------------------------
-$remoteConf = (& $rcloneExe config dump | ConvertFrom-Json).$remoteName
-if (-not $remoteConf) { Write-Log "FATAL: rclone remote '$remoteName' not found"; exit 1 }
-$refreshToken = ($remoteConf.token | ConvertFrom-Json).refresh_token
-$script:accessToken = $null
-$script:accessTokenExpiry = [datetime]::MinValue
-
-function Get-AccessToken {
-    if ($script:accessToken -and (Get-Date) -lt $script:accessTokenExpiry) { return $script:accessToken }
-    # -TimeoutSec is essential: the default is infinite, and a hung TLS
-    # connection would freeze the whole watcher silently
-    $resp = Invoke-RestMethod -Method Post -Uri "https://oauth2.googleapis.com/token" -TimeoutSec 30 -Body @{
-        client_id = $remoteConf.client_id; client_secret = $remoteConf.client_secret
-        refresh_token = $refreshToken; grant_type = "refresh_token"
-    }
-    $script:accessToken = $resp.access_token
-    $script:accessTokenExpiry = (Get-Date).AddSeconds($resp.expires_in - 60)
-    return $script:accessToken
-}
-
-function Invoke-Drive([string]$pathAndQuery) {
-    # one retry with a forced token refresh on 401
-    foreach ($attempt in 1, 2) {
-        try {
-            return Invoke-RestMethod -Uri "https://www.googleapis.com/drive/v3/$pathAndQuery" -TimeoutSec 60 `
-                -Headers @{ Authorization = "Bearer $(Get-AccessToken)" }
-        }
-        catch {
-            $status = $_.Exception.Response.StatusCode.value__
-            if ($attempt -eq 1 -and $status -eq 401) { $script:accessTokenExpiry = [datetime]::MinValue; continue }
-            throw
-        }
-    }
-}
-
-$rootId = (Invoke-Drive "files/root?fields=id").id
+# --- Drive API: the rclone remote's credentials, path resolution ----------
+# (drive-api.ps1: Invoke-Drive, Resolve-RelPath, the folder cache $dirCache)
+. (Join-Path $PSScriptRoot "drive-api.ps1")
+try { $rootId = Initialize-DriveApi $rcloneExe $remoteName }
+catch { Write-Log "FATAL: $($_.Exception.Message)"; exit 1 }
 Write-Log "started (PID $PID): $($rules.Dirs.Count) dir rules, root=$rootId, poll=${PollSeconds}s"
-
-# --- path resolution via parent-chain walk with cache -----------------------
-$dirCache = @{}  # folder id -> @{ Name; Parent }
-
-function Get-FolderInfo([string]$id) {
-    if ($dirCache.ContainsKey($id)) { return $dirCache[$id] }
-    $f = Invoke-Drive "files/$([uri]::EscapeDataString($id))?fields=id,name,parents"
-    $info = @{ Name = $f.name; Parent = @($f.parents)[0] }
-    $dirCache[$id] = $info
-    return $info
-}
-
-function Resolve-RelDir([string]$parentId) {
-    # returns the relative directory path ("" for My Drive root),
-    # or $null if the chain does not reach the root (shared/orphaned)
-    $segs = @()
-    $id = $parentId
-    for ($depth = 0; $depth -lt 100; $depth++) {
-        if ($id -eq $rootId) { return ($segs -join '\') }
-        if (-not $id) { return $null }
-        $info = Get-FolderInfo $id
-        $segs = @($info.Name) + $segs
-        $id = $info.Parent
-    }
-    return $null
-}
-
-function Resolve-RelPath($file) {
-    $parent = @($file.parents)[0]
-    if (-not $parent) { return $null }
-    $dir = Resolve-RelDir $parent
-    if ($null -eq $dir) { return $null }
-    if ($dir) { return "$dir\$($file.name)" } else { return $file.name }
-}
 
 # --- page token: persisted across restarts ----------------------------------
 $pageToken = if (Test-Path $tokenFile) { (Get-Content $tokenFile -Raw).Trim() } else { $null }
