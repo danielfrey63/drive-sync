@@ -241,7 +241,7 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 | `upload-ledger.ps1` | echo control between the watchers: own uploads with modtime and size |
 | `conflict-names.ps1` | recognises bisync's `.conflictN` losers: the upload watcher never replays that rename, `sweep-conflicts.ps1` moves the losers out of the corpus |
 | `test-conflict-chain.ps1` | tests for the two modules above (no cloud access) |
-| `test-pending-rename.ps1` | an upload pending when its file or folder is renamed follows the new name; `-Live` runs it against the watcher and the cloud in `Temp\` |
+| `test-pending-rename.ps1` | an upload pending when its file or folder is renamed follows the new name, and a copy a resync brought back under the old name is recycled; `-Live` runs it against the watcher and the cloud in `Temp\` |
 | `run-hidden.vbs` | windowless task launcher (no console window flashing) |
 | `install-sync-task.ps1`, `install-watcher-task.ps1` | register the scheduled tasks (idempotent) |
 | `uninstall.ps1` | stops the watchers and removes all four tasks (`-RemoveState` also deletes the state dir) |

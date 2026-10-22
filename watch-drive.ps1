@@ -106,6 +106,9 @@ Set-Content $lockFile $PID
 # --- local intent: tells the cloud watcher what is gone here on purpose -----
 . (Join-Path $PSScriptRoot "local-intent.ps1")
 
+# --- recycle bin: for copies a resync brought back under an old name --------
+. (Join-Path $PSScriptRoot "recycle-bin.ps1")
+
 # --- derive exclude sets from filters.txt -----------------------------------
 . (Join-Path $PSScriptRoot "filter-rules.ps1")
 $rules = Get-ExcludeRules $filters
@@ -153,6 +156,47 @@ function Move-PendingPaths([string]$oldRel, [string]$newRel) {
         [void]$pending.Remove($p)
         [void]$pending.Add($moved)
     }
+}
+
+function Test-BisyncRunning {
+    if (-not (Test-Path $bisyncLock)) { return $false }
+    $lockPid = Get-Content $bisyncLock -ErrorAction SilentlyContinue | Select-Object -First 1
+    return [bool]($lockPid -and (Get-Process -Id $lockPid -ErrorAction SilentlyContinue))
+}
+
+# A rename that waited out a bisync is checked after its server-side move: a
+# --resync merges both sides without deleting, sees the old name in the cloud
+# and the new one on disk, and copies the old name back down. The m4a moved
+# into protokolle\2026-10-20 during the 66-min resync of 2026-10-20 came back
+# that way. An old path on disk again with the size and modtime of the new
+# one is that copy: recycle it and drop the upload its download queued. A
+# file that differs is somebody's work and stays.
+function Remove-RevivedRenameSource([string]$oldRel, [string]$newRel) {
+    $oldAbs = Join-Path $root $oldRel
+    $newAbs = Join-Path $root $newRel
+    if (Test-Path -LiteralPath $oldAbs -PathType Leaf) { $files = @(Get-Item -LiteralPath $oldAbs -Force) }
+    elseif (Test-Path -LiteralPath $oldAbs -PathType Container) { $files = @(Get-ChildItem -LiteralPath $oldAbs -Recurse -File -Force) }
+    else { return }
+    $recycled = 0; $kept = 0
+    foreach ($o in $files) {
+        $suffix = $o.FullName.Substring($oldAbs.Length)
+        $n = Get-Item -LiteralPath ($newAbs + $suffix) -Force -ErrorAction SilentlyContinue
+        $same = $n -and -not $n.PSIsContainer -and $n.Length -eq $o.Length -and
+            [math]::Abs(($n.LastWriteTimeUtc - $o.LastWriteTimeUtc).TotalSeconds) -le 1
+        if ($same -and (Move-ToRecycleBin $o.FullName) -eq 0) {
+            [void]$pending.Remove($oldRel + $suffix)
+            $recycled++
+        }
+        else { $kept++ }
+    }
+    if (Test-Path -LiteralPath $oldAbs -PathType Container) {
+        # folders the recycled files left empty, deepest first
+        $dirs = @(Get-ChildItem -LiteralPath $oldAbs -Recurse -Directory -Force | Sort-Object { $_.FullName.Length } -Descending) + @(Get-Item -LiteralPath $oldAbs -Force)
+        foreach ($d in $dirs) {
+            if (-not (Get-ChildItem -LiteralPath $d.FullName -Force | Select-Object -First 1)) { [IO.Directory]::Delete($d.FullName) }
+        }
+    }
+    Write-Log "revived by bisync under the old name $($oldRel -replace '\\', '/'): $recycled recycled, $kept kept (differ)"
 }
 
 function Add-PendingPath([string]$abs, [string]$rel) {
@@ -304,7 +348,7 @@ try {
                 if ($oldOk -and $oldRel -like "*.partial") { $oldOk = $false }   # rclone download temp -> plain create
                 if ($oldOk) { $intent.Add($oldRel) }
                 if ($newOk) { Move-PendingPaths $oldRel $rel }
-                if ($oldOk -and $newOk) { $renames.Add([pscustomobject]@{ Old = $oldRel; New = $rel }) }
+                if ($oldOk -and $newOk) { $renames.Add([pscustomobject]@{ Old = $oldRel; New = $rel; DuringBisync = $false }) }
                 elseif ($oldOk) { [void]$deletes.Add($oldRel) }   # renamed INTO an excluded name
                 elseif ($newOk) { Add-PendingPath $path $rel }    # renamed OUT of an excluded/temp name
             }
@@ -325,15 +369,16 @@ try {
         if ($drained -gt 0) { Write-Log "events: $drained drained, $($pending.Count) up / $($renames.Count) ren / $($deletes.Count) del pending" }
 
         if (($pending.Count + $renames.Count + $deletes.Count) -eq 0) { $oldestPending = $null; continue }
+        # checked on every pass, not only when a flush is due: a rename made in
+        # the last seconds of a resync must be marked too
+        $bisyncRunning = Test-BisyncRunning
+        if ($bisyncRunning) { foreach ($rn in $renames) { $rn.DuringBisync = $true } }
         $quiet = $lastEvent -and ((Get-Date) - $lastEvent).TotalSeconds -ge 15
         $overdue = $oldestPending -and ((Get-Date) - $oldestPending).TotalSeconds -ge 60
         if (-not ($quiet -or $overdue)) { continue }
 
         # defer while the nightly bisync holds its lock
-        if (Test-Path $bisyncLock) {
-            $lockPid = Get-Content $bisyncLock -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($lockPid -and (Get-Process -Id $lockPid -ErrorAction SilentlyContinue)) { continue }
-        }
+        if ($bisyncRunning) { continue }
         $oldestPending = $null
 
         # the flush cycle must never kill the watcher - log and carry on
@@ -399,6 +444,7 @@ try {
                     Write-Log "rename: $oldR -> $newR"
                     Add-LedgerEntries @($rn.New)
                     $intentDone.Add($rn.Old)
+                    if ($rn.DuringBisync) { Remove-RevivedRenameSource $rn.Old $rn.New }
                 }
                 else {
                     # old path unknown in the cloud (e.g. editor tmp-file save): upload instead
