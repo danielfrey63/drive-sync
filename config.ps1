@@ -39,6 +39,9 @@ $DriveSyncConfig = @{
     # network error, retried next night) alerts only once the last success
     # is older than this
     AlertStaleSyncHours = 36
+    # a normal nightly run refuses to start once the last success is older
+    # than this; only a -Resync (through resync-guard.ps1) gets past it
+    MaxBaselineAgeDays = 3
     # the watchdog alerts once a watcher needed this many restarts within
     # an hour (it dies right after start - missing file, parse error, ...)
     AlertWatcherRestarts = 3

@@ -23,13 +23,18 @@
 #   pwsh -File sync-drive.ps1 -Resync -SkipResyncGuard
 #                                          # resync without the revive guard
 #                                          # (see resync-guard.ps1)
+#   pwsh -File sync-drive.ps1 -AllowStaleBaseline
+#                                          # normal run although the last success
+#                                          # is older than MaxBaselineAgeDays
 
 param(
     [switch]$Resync,
     [ValidateSet("", "path1", "path2", "newer", "older", "larger", "smaller")]
     [string]$ResyncMode = "",
     [switch]$SkipResyncGuard,
-    [switch]$DryRun
+    [switch]$DryRun,
+    # run normally although the last success is older than MaxBaselineAgeDays
+    [switch]$AllowStaleBaseline
 )
 
 $ErrorActionPreference = "Stop"
@@ -67,6 +72,28 @@ while ($true) {
             exit 2
         }
         Start-Sleep -Seconds 60
+    }
+}
+
+# --- stale baseline guard ---------------------------------------------------
+# A baseline that old no longer describes the cloud. bisync then reads every
+# file the other machine deleted or moved since, and that this machine still
+# holds slightly changed, as "changed here, deleted there" - and the change
+# wins. From 2026-10-23 to 2026-10-31 the second laptop ran its nightly job
+# with the lid closed, every run failing on a baseline from 23.10. 02:01; on
+# 31.10. one got through far enough to push 70 conflict copies and the
+# pre-restructure sem layout back into the cloud. Its alerts fired on a
+# screen nobody looked at, so the run has to refuse, not just warn: a -Resync
+# goes through resync-guard.ps1, which checks the cloud trash first.
+$maxAgeD = if ($DriveSyncConfig.MaxBaselineAgeDays) { [double]$DriveSyncConfig.MaxBaselineAgeDays } else { 3 }
+if (-not $Resync -and -not $DryRun -and -not $AllowStaleBaseline -and (Test-Path $statusFile)) {
+    $last = (Get-Content $statusFile -Raw | ConvertFrom-Json).lastSuccess
+    if ($last -and ((Get-Date) - [datetime]$last.end).TotalDays -gt $maxAgeD) {
+        $since = ([datetime]$last.end).ToString("dd.MM. HH:mm")
+        Write-Warning "last successful run $since is older than $maxAgeD day(s) - refusing a normal run; use -Resync (with the guard) or -AllowStaleBaseline"
+        Send-DriveSyncAlert -Key "bisync-stale" -Title "Drive-Sync: Nachtlauf gesperrt" `
+            -Body "Letzter Erfolg $since, älter als $maxAgeD Tage. Ein normaler Lauf könnte veraltete Dateien zurück in die Cloud schieben. Nötig: sync-drive.ps1 -Resync -ResyncMode newer (mit Guard)." | Out-Null
+        exit 3
     }
 }
 
