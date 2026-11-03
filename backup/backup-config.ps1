@@ -116,6 +116,12 @@ $BackupConfig = @{
     # compression); set again for the next bulk ingestion.
     ExpectedRepoGB = 0
 
+    # scripts run (each in its own pwsh) right before the restic backup; they
+    # must write their artefacts into one of the Sources. Failures are reported
+    # but never block the backup. Machine-specific -> backup-config.local.ps1.
+    PreBackupScripts = @()
+    # run after a completed backup only (switches allowed: "script.ps1 -A -B")
+    PostBackupScripts = @()
     FirstRunAt   = "05:00"                 # after the 04:00 bisync
     IntervalHours = 6                      # 05:00, 11:00, 17:00, 23:00
 }

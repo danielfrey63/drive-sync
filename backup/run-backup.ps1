@@ -110,6 +110,23 @@ try {
     # only those, never the lock of a live process
     & $cfg.Restic unlock @common 2>&1 | Tee-Object -FilePath $log -Append | Out-Null
 
+    # pre-backup hooks (PreBackupScripts): produce consistent artefacts inside the
+    # backed-up trees, e.g. a pg_dump of a server database pulled onto C:.
+    # Each runs in its own pwsh process; a failing hook is logged and toasted
+    # but never blocks the backup - the previous artefact is still in place.
+    if (-not $DryRun) {
+        foreach ($hook in @($cfg.PreBackupScripts)) {
+            if (-not $hook) { continue }
+            Log "pre-backup hook: $hook"
+            $hookOut = & (Get-Process -Id $PID).Path -NoProfile -File $hook 2>&1
+            $hookRc = $LASTEXITCODE
+            $hookOut | ForEach-Object { Log "  $_" }
+            if ($hookRc -ne 0) {
+                Log "pre-backup hook FAILED rc=${hookRc}: $hook (backup continues)"
+                Notify "Backup pre-hook FAILED" "$(Split-Path $hook -Leaf) rc=$hookRc`nBackup continues with the previous artefact.`nLog: $log"
+            }
+        }
+    }
     # one restic invocation PER source: each tree gets its own snapshot chain
     # and thus its own parent. Until a tree's first snapshot exists, every
     # restart re-reads the whole tree (index dedup prevents re-upload, but the
@@ -192,6 +209,23 @@ try {
     # a completed run clears the postponement streak
     Remove-Item $postponeStamp -ErrorAction SilentlyContinue
 
+    # post-backup hooks (PostBackupScripts): only reached after a completed
+    # backup, e.g. to confirm that a pulled server dump is now in a snapshot.
+    # Failures are logged, never fatal.
+    if (-not $DryRun) {
+        foreach ($hook in @($cfg.PostBackupScripts)) {
+            if (-not $hook) { continue }
+            # "script.ps1 -A -B": the path, then one argument per switch
+            $hookArgs = @($hook -split '\s+(?=-)')
+            Log "post-backup hook: $hook"
+            $hookCmd = @("-NoProfile", "-File", $hookArgs[0])
+            if ($hookArgs.Count -gt 1) { $hookCmd += $hookArgs[1..($hookArgs.Count - 1)] }
+            $hookOut = & (Get-Process -Id $PID).Path @hookCmd 2>&1
+            $hookRc = $LASTEXITCODE
+            $hookOut | ForEach-Object { Log "  $_" }
+            if ($hookRc -ne 0) { Log "post-backup hook FAILED rc=${hookRc}: $hook" }
+        }
+    }
     # restic's own summary lines (one "Added"/"processed" pair per source) make the toast body
     $summary = @($out | Where-Object { "$_" -match '^(Added to the repository|processed \d)' } | ForEach-Object { "$_".Trim() })
     if ($errors.Count -gt 0) { $summary += "$($errors.Count) unreadable file(s), see log" }
