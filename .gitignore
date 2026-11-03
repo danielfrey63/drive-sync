@@ -6,3 +6,7 @@ config.local.ps1
 *.log
 filters.txt.md5
 backup/backup-config.local.ps1
+
+# Claude Code: runtime artefacts (the config itself is tracked)
+.claude/hook-log.txt
+.claude/settings.local.json
