@@ -54,6 +54,32 @@ if ($fn) {
     Check "Rename ohne pending Eintrag aendert nichts" ($pending.Count -eq 5) "$($pending.Count) Eintraege"
 }
 
+# --- offline: a change event drained after its file was already renamed -----
+# The 2026-11-02 case. Live timing cannot force it, so replay the drain order:
+# Changed(old) when old is already gone, then Renamed(old -> new).
+$fn = Get-WatcherFunction "Add-ChangedPath"
+Check "Add-ChangedPath in watch-drive.ps1 gefunden" ($null -ne $fn)
+if ($fn) {
+    . ([scriptblock]::Create($fn.Extent.Text))
+    $scratch = Join-Path ([IO.Path]::GetTempPath()) ("changed-test-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    New-Item -ItemType Directory -Force (Join-Path $scratch "dir") | Out-Null
+    Set-Content (Join-Path $scratch "da.md") "x"
+    try {
+        $pending = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        Add-ChangedPath (Join-Path $scratch "da.md") "da.md"
+        Check "Change: vorhandene Datei wird vorgemerkt" ($pending.Contains("da.md"))
+        Add-ChangedPath (Join-Path $scratch "dir") "dir"
+        Check "Change: Ordner wird nicht vorgemerkt" (-not $pending.Contains("dir"))
+        Add-ChangedPath (Join-Path $scratch "2030-v0.2.md") "2030-v0.2.md"
+        Check "Change: schon weggezogene Datei wird trotzdem vorgemerkt" ($pending.Contains("2030-v0.2.md"))
+        $fnMove = Get-WatcherFunction "Move-PendingPaths"
+        . ([scriptblock]::Create($fnMove.Extent.Text))
+        Move-PendingPaths "2030-v0.2.md" "2027-v0.2.md"
+        Check "Change + Rename in einer Runde: Upload unter neuem Namen" ($pending.Contains("2027-v0.2.md") -and -not $pending.Contains("2030-v0.2.md"))
+    }
+    finally { Remove-Item -LiteralPath $scratch -Recurse -Force }
+}
+
 # --- offline: copies revived under the old name -----------------------------
 $fn = Get-WatcherFunction "Remove-RevivedRenameSource"
 Check "Remove-RevivedRenameSource in watch-drive.ps1 gefunden" ($null -ne $fn)
@@ -159,6 +185,14 @@ try {
 
     $left = @(& $rcloneExe lsf -R --files-only $remoteDir 2>$null)
     Check "Cloud: keine alten Namen uebrig" (-not ($left -contains "a.md" -or $left -contains "F/x.md")) ($left -join ", ")
+
+    # write and rename without a pause. Whether the change event is drained
+    # before or after the rename depends on timing, so this does not reliably
+    # hit the 2026-11-02 drain order - the offline Add-ChangedPath case does
+    [IO.File]::WriteAllText((Join-Path $localDir "b.md"), "v3")
+    [IO.File]::Move((Join-Path $localDir "b.md"), (Join-Path $localDir "c.md"))
+    $got = Wait-CloudContent "c.md" "v3"
+    Check "Datei: schreiben + sofort umbenennen -> Cloud hat neuen Inhalt" ($got -eq "v3") "Cloud: '$got'"
 
     # a rename during a resync: hold a fake bisync lock, rename, let the
     # "resync" copy the old name back down from the cloud, release the lock

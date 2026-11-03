@@ -158,6 +158,17 @@ function Move-PendingPaths([string]$oldRel, [string]$newRel) {
     }
 }
 
+# A change event queues its file. Files only: a timestamp touch on a directory
+# (e.g. by a sync download into it) must not enqueue its entire subtree. A path
+# that is gone by now is queued too: it may have been renamed in the same
+# drain, and the rename event that follows carries it to the new name
+# (Move-PendingPaths). Dropping it lost the upload on 2026-11-02 - written and
+# renamed within 16:59:12, the cloud kept the 29.10. content under the new
+# name. The upload stage drops whatever is missing or a directory.
+function Add-ChangedPath([string]$abs, [string]$rel) {
+    if (-not (Test-Path -LiteralPath $abs -PathType Container)) { [void]$pending.Add($rel) }
+}
+
 function Test-BisyncRunning {
     if (-not (Test-Path $bisyncLock)) { return $false }
     $lockPid = Get-Content $bisyncLock -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -352,11 +363,7 @@ try {
                 elseif ($newOk) { Add-PendingPath $path $rel }    # renamed OUT of an excluded/temp name
             }
             elseif ($src -eq "fswChanged") {
-                # files only: a timestamp touch on a directory (e.g. by a sync
-                # download into it) must not enqueue its entire subtree
-                if (-not (Test-Excluded $rules $rel) -and (Test-Path -LiteralPath $path -PathType Leaf)) {
-                    [void]$pending.Add($rel)
-                }
+                if (-not (Test-Excluded $rules $rel)) { Add-ChangedPath $path $rel }
             }
             else {
                 if (-not (Test-Excluded $rules $rel)) { Add-PendingPath $path $rel }
