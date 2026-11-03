@@ -101,6 +101,11 @@ Set-Content $lockFile $PID
 # --- local intent: what the upload watcher removed here on purpose ----------
 . (Join-Path $PSScriptRoot "local-intent.ps1")
 
+# --- alerts for conflict copies another machine pushed ----------------------
+. (Join-Path $PSScriptRoot "conflict-names.ps1")
+. (Join-Path $PSScriptRoot "notify.ps1")
+$sweepLog = Join-Path $stateDir "conflicts.log"
+
 # --- exclude rules from filters.txt -----------------------------------------
 . (Join-Path $PSScriptRoot "filter-rules.ps1")
 $rules = Get-ExcludeRules (Join-Path $PSScriptRoot "filters.txt")
@@ -265,6 +270,21 @@ try {
                         $exit = $LASTEXITCODE
                         $downloadedTotal += $batch.Count
                         Write-Log "flush: $($batch.Count) file(s), exit=$exit"
+                        # A conflict copy arriving from the cloud was made by
+                        # another machine's bisync - ours are swept and logged
+                        # in conflicts.log before the lock is released. On
+                        # 2026-10-31 the closed P16 pushed 70 of them and
+                        # nothing here said so for two days.
+                        $foreign = @($batch | Where-Object { Test-ConflictName $_ })
+                        if ($foreign.Count -gt 0) {
+                            $known = if (Test-Path -LiteralPath $sweepLog) { Get-Content -LiteralPath $sweepLog -Raw } else { "" }
+                            $foreign = @($foreign | Where-Object { -not $known.Contains($_) })
+                        }
+                        if ($foreign.Count -gt 0) {
+                            Write-Log "WARN $($foreign.Count) conflict cop(ies) arrived from the cloud: $(($foreign | Select-Object -First 3) -join ', ')"
+                            Send-DriveSyncAlert -Key "conflict-incoming" -Title "Drive-Sync: Konfliktkopien aus der Cloud" `
+                                -Body "$($foreign.Count) Datei(en), z.B. $($foreign[0]). Ein anderer Rechner hat Konflikte erzeugt. Läuft er noch?" | Out-Null
+                        }
                     }
                 }
 

@@ -13,9 +13,18 @@
 # Called by sync-drive.ps1 after every real run; can be run standalone
 # against any bisync log. -WhatIf reports without moving. Idempotent:
 # already-moved files are skipped silently.
+#
+# -Scan instead looks at every .conflictN file in the current baseline
+# listing, whoever made it. The log-based sweep only knows this machine's
+# losers; on 2026-10-31 the closed P16 pushed 70 of its own, the cloud
+# watcher downloaded them and they sat in the corpus for two days. A scan
+# moves only copies that are provably redundant - byte-identical to the
+# original, a prefix of it (append-only logs), or a blob in its git history -
+# and raises an alert for the rest, which need a human.
 
 param(
-    [Parameter(Mandatory)][string]$LogFile,
+    [Parameter(Mandatory, ParameterSetName = "Log")][string]$LogFile,
+    [Parameter(Mandatory, ParameterSetName = "Scan")][switch]$Scan,
     [switch]$WhatIf
 )
 
@@ -25,17 +34,6 @@ $ErrorActionPreference = "Stop"
 $root = $DriveSyncConfig.LocalRoot
 $stateDir = $DriveSyncConfig.StateDir
 $sweepLog = Join-Path $stateDir "conflicts.log"
-
-if (-not (Test-Path -LiteralPath $LogFile)) { Write-Host "sweep: log not found: $LogFile"; exit 0 }
-
-# collect the loser paths this run created (both sides can lose)
-$rels = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-foreach ($line in Get-Content -LiteralPath $LogFile -ErrorAction SilentlyContinue) {
-    $p = Get-ConflictLoserRel $line $root
-    if ($p) { [void]$rels.Add($p) }
-}
-if ($rels.Count -eq 0) { exit 0 }
-Write-Host "sweep: $($rels.Count) conflict cop(ies) named in $([IO.Path]::GetFileName($LogFile))"
 
 # is the loser's content already a blob of the original path in git history?
 function Test-InGitHistory([string]$absConflict, [string]$rel) {
@@ -61,19 +59,86 @@ function Test-InGitHistory([string]$absConflict, [string]$rel) {
     catch { return "unknown" }
 }
 
+# Is the copy redundant next to its original? Returns the marker, or $null if
+# it holds content found nowhere else.
+function Get-RedundancyMarker([string]$abs, [string]$rel) {
+    $origAbs = $abs -replace '\.conflict\d+$', ''
+    if (-not (Test-Path -LiteralPath $origAbs -PathType Leaf)) { return $null }
+    $c = Get-Item -LiteralPath $abs
+    $o = Get-Item -LiteralPath $origAbs
+    if ($c.Length -le $o.Length) {
+        # equal bytes, or the original continues the copy (an append-only log
+        # that grew on the other machine after the split)
+        $cb = [IO.File]::ReadAllBytes($abs)
+        $ob = [byte[]]::new($cb.Length)
+        $fs = [IO.File]::OpenRead($origAbs)
+        try { [void]$fs.Read($ob, 0, $cb.Length) } finally { $fs.Close() }
+        if ([Linq.Enumerable]::SequenceEqual($cb, $ob)) {
+            if ($c.Length -eq $o.Length) { return "SAME-AS-ORIGINAL" } else { return "PREFIX-OF-ORIG" }
+        }
+    }
+    if ((Test-InGitHistory $abs $rel) -eq "in-git") { return "in-git" }
+    return $null
+}
+
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $destRoot = Join-Path $stateDir "conflicts\$stamp"
-$moved = 0
-foreach ($rel in @($rels | Sort-Object)) {
+function Move-ToConflictArchive([string]$rel, [string]$marker) {
     $abs = Join-Path $root $rel
-    if (-not (Test-Path -LiteralPath $abs)) { continue }   # never downloaded or already swept
-    $marker = Test-InGitHistory $abs $rel
-    if ($WhatIf) { Write-Host "sweep would move [$marker]: $rel"; continue }
+    if ($WhatIf) { Write-Host "sweep would move [$marker]: $rel"; return }
     $dest = Join-Path $destRoot $rel
     New-Item -ItemType Directory -Force (Split-Path $dest -Parent) | Out-Null
     Move-Item -LiteralPath $abs -Destination $dest
     Add-Content $sweepLog "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') [$marker] $rel -> $dest"
     Write-Host "sweep [$marker]: $rel"
+}
+
+if ($Scan) {
+    # the listing, not the disk: a walk over 1.2M files takes minutes, the
+    # baseline the run just wrote lists every file in seconds
+    . (Join-Path $PSScriptRoot "bisync-index.ps1")
+    $listings = Get-BisyncListings $root $DriveSyncConfig.Remote
+    if (-not $listings) { Write-Host "sweep scan: no baseline listing - skipped"; exit 0 }
+    $found = foreach ($line in [IO.File]::ReadLines($listings.Path1)) {
+        if ($line -notmatch '\.conflict\d+"\s*$') { continue }
+        $q1 = $line.IndexOf('"'); $q2 = $line.LastIndexOf('"')
+        if ($q2 -gt $q1) { $line.Substring($q1 + 1, $q2 - $q1 - 1) -replace '/', '\' }
+    }
+    $kept = [System.Collections.Generic.List[string]]::new()
+    $moved = 0
+    foreach ($rel in @($found | Sort-Object -Unique)) {
+        $abs = Join-Path $root $rel
+        if (-not (Test-Path -LiteralPath $abs -PathType Leaf)) { continue }
+        $marker = Get-RedundancyMarker $abs $rel
+        if ($marker) { Move-ToConflictArchive $rel "SCAN $marker"; $moved++ }
+        else { $kept.Add($rel) }
+    }
+    Write-Host "sweep scan: $(@($found).Count) listed, $moved redundant moved, $($kept.Count) need review"
+    if ($kept.Count -gt 0 -and -not $WhatIf) {
+        foreach ($k in $kept) { Write-Host "  review: $k" }
+        . (Join-Path $PSScriptRoot "notify.ps1")
+        Send-DriveSyncAlert -Key "conflict-review" -Title "Drive-Sync: Konfliktkopien prüfen" `
+            -Body "$($kept.Count) Konfliktkopie(n) mit eigenem Inhalt, z.B. $($kept[0]). Liste: sweep-conflicts.ps1 -Scan -WhatIf" | Out-Null
+    }
+    exit 0
+}
+
+if (-not (Test-Path -LiteralPath $LogFile)) { Write-Host "sweep: log not found: $LogFile"; exit 0 }
+
+# collect the loser paths this run created (both sides can lose)
+$rels = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($line in Get-Content -LiteralPath $LogFile -ErrorAction SilentlyContinue) {
+    $p = Get-ConflictLoserRel $line $root
+    if ($p) { [void]$rels.Add($p) }
+}
+if ($rels.Count -eq 0) { exit 0 }
+Write-Host "sweep: $($rels.Count) conflict cop(ies) named in $([IO.Path]::GetFileName($LogFile))"
+
+$moved = 0
+foreach ($rel in @($rels | Sort-Object)) {
+    $abs = Join-Path $root $rel
+    if (-not (Test-Path -LiteralPath $abs)) { continue }   # never downloaded or already swept
+    Move-ToConflictArchive $rel (Test-InGitHistory $abs $rel)
     $moved++
 }
 if (-not $WhatIf) { Write-Host "sweep: $moved file(s) moved to $destRoot (log: $sweepLog)" }

@@ -208,6 +208,12 @@ try {
     if (-not $DryRun) {
         try { & pwsh -NoProfile -File (Join-Path $PSScriptRoot "sweep-conflicts.ps1") -LogFile $logFile }
         catch { Write-Warning "conflict sweep failed: $_" }
+        # then every conflict copy the fresh baseline still lists - including
+        # those another machine made (2026-10-31: 70 from the P16)
+        if ($exit -eq 0) {
+            try { & pwsh -NoProfile -File (Join-Path $PSScriptRoot "sweep-conflicts.ps1") -Scan }
+            catch { Write-Warning "conflict scan failed: $_" }
+        }
     }
 
     # --- periodic empty-dir cleanup on the remote --------------------------

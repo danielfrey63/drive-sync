@@ -186,13 +186,32 @@ try {
     $left = @(& $rcloneExe lsf -R --files-only $remoteDir 2>$null)
     Check "Cloud: keine alten Namen uebrig" (-not ($left -contains "a.md" -or $left -contains "F/x.md")) ($left -join ", ")
 
-    # write and rename without a pause. Whether the change event is drained
-    # before or after the rename depends on timing, so this does not reliably
-    # hit the 2026-11-02 drain order - the offline Add-ChangedPath case does
-    [IO.File]::WriteAllText((Join-Path $localDir "b.md"), "v3")
-    [IO.File]::Move((Join-Path $localDir "b.md"), (Join-Path $localDir "c.md"))
-    $got = Wait-CloudContent "c.md" "v3"
-    Check "Datei: schreiben + sofort umbenennen -> Cloud hat neuen Inhalt" ($got -eq "v3") "Cloud: '$got'"
+    # The 2026-11-02 drain order: change and rename read in ONE drain, after
+    # the old path is gone. That happens when both events queue up while the
+    # watcher is busy, so write and rename during an upload - a dummy file
+    # keeps the flush running for a few seconds. The event log numbers each
+    # drain; retry until change and rename carry the same number.
+    $evLog = Join-Path $DriveSyncConfig.StateDir "watcher-events.log"
+    $rel = "Temp\$name"
+    $src = "b.md"; $hit = 0; $contentOk = $true
+    for ($k = 1; $k -le 6 -and -not $hit; $k++) {
+        [IO.File]::WriteAllBytes((Join-Path $localDir "dummy$k.bin"), [byte[]]::new(15MB))
+        # flush starts after 15 s of quiet; act a little later, varied per try
+        Start-Sleep -Seconds (16 + ($k % 3))
+        $dst = "c$k.md"
+        [IO.File]::WriteAllText((Join-Path $localDir $src), "v3-$k")
+        [IO.File]::Move((Join-Path $localDir $src), (Join-Path $localDir $dst))
+        $got = Wait-CloudContent $dst "v3-$k"
+        if ($got -ne "v3-$k") { $contentOk = $false; Write-Host "  Versuch ${k}: Cloud hat '$got' statt 'v3-$k'" }
+        $lines = @(Get-Content $evLog -Tail 3000)
+        $chg = $lines | Where-Object { $_ -like "* fswChanged $rel\$src`t#d*" } | Select-Object -Last 1
+        $ren = $lines | Where-Object { $_ -like "* fswRenamed $rel\$src -> $rel\$dst`t#d*" } | Select-Object -Last 1
+        if ($chg -and $ren -and ($chg -split '#d')[-1] -eq ($ren -split '#d')[-1]) { $hit = $k }
+        $src = $dst
+    }
+    Check "Datei: schreiben + sofort umbenennen -> Cloud hat jedes Mal den neuen Inhalt" $contentOk
+    if ($hit) { Check "Change und Rename in derselben Sammelrunde getroffen (Versuch $hit)" $true }
+    else { Write-Host "SKIP  Change und Rename nie in derselben Sammelrunde - der Fall vom 02.11. ist nur offline geprueft" }
 
     # a rename during a resync: hold a fake bisync lock, rename, let the
     # "resync" copy the old name back down from the cloud, release the lock

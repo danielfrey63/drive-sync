@@ -85,7 +85,10 @@ function Write-EventLog([string[]]$lines) {
             Move-Item $eventLogFile "$eventLogFile.1" -Force -ErrorAction SilentlyContinue
         }
         $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-        Add-Content $eventLogFile @($lines | ForEach-Object { "$ts $_" }) -ErrorAction SilentlyContinue
+        # the drain number tells which events were read together - needed to
+        # see whether a change and a rename shared a drain (test-pending-rename.ps1)
+        $script:drainSeq++
+        Add-Content $eventLogFile @($lines | ForEach-Object { "$ts $_`t#d$script:drainSeq" }) -ErrorAction SilentlyContinue
     }
     catch {}
 }
@@ -523,9 +526,38 @@ try {
             elseif ($deletes.Count -gt 0) {
                 $delList = @($deletes | Sort-Object)
                 $deletes.Clear()
+                $todo = [System.Collections.Generic.List[string]]::new()
                 foreach ($d in $delList) {
                     if (Test-Path -LiteralPath (Join-Path $root $d)) { $intentDone.Add($d); continue }   # recreated meanwhile
                     if (@($delList | Where-Object { $_ -ne $d -and $d.StartsWith("$_\") }).Count -gt 0) { $intentDone.Add($d); continue }   # ancestor dir covers it
+                    $todo.Add($d)
+                }
+                # One listing and one delete for all plain files: a stat plus a
+                # deletefile per path cost ~11 s each, 76 deletes took 18 min
+                # on 2026-11-02. What the listing does not return - a folder,
+                # or a path already gone - and a failed batch take the
+                # per-path route below.
+                $rest = @($todo)
+                if ($todo.Count -gt 1) {
+                    $delFile = Join-Path $stateDir "watcher-deletes.txt"
+                    Set-Content -Path $delFile -Value @($todo | ForEach-Object { $_ -replace '\\', '/' }) -Encoding UTF8
+                    $lsRaw = & $rcloneExe lsjson $remote -R --files-only --files-from-raw $delFile --no-traverse @pacer 2>$null
+                    if ($LASTEXITCODE -eq 0) {
+                        $live = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                        if ($lsRaw) { foreach ($o in (($lsRaw -join "`n") | ConvertFrom-Json)) { [void]$live.Add(($o.Path -replace '/', '\')) } }
+                        $files = @($todo | Where-Object { $live.Contains($_) })
+                        $rest = @($todo | Where-Object { -not $live.Contains($_) })
+                        if ($files.Count -gt 0) {
+                            Set-Content -Path $delFile -Value @($files | ForEach-Object { $_ -replace '\\', '/' }) -Encoding UTF8
+                            & $rcloneExe delete $remote --files-from-raw $delFile --no-traverse @pacer --log-level ERROR --log-file $logFile 2>$null
+                            if ($LASTEXITCODE -eq 0) {
+                                foreach ($d in $files) { $deletedTotal++; $intentDone.Add($d); Write-Log "delete -> Drive trash: $($d -replace '\\', '/')" }
+                            }
+                            else { Write-Log "WARN batch delete failed (exit $LASTEXITCODE) - one by one"; $rest += $files }
+                        }
+                    }
+                }
+                foreach ($d in $rest) {
                     $dR = $d -replace '\\', '/'
                     $stat = & $rcloneExe lsjson "$remote$dR" --stat @pacer 2>$null | ConvertFrom-Json
                     if (-not $stat) { $intentDone.Add($d); continue }   # not in the cloud (already gone)

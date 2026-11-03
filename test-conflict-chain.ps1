@@ -105,6 +105,32 @@ try {
     Check "Gewinner-Zeile (Not renaming) ist kein Verlierer" ($null -eq (Get-ConflictLoserRel $win $r))
     Check "Queue-Zeile ist kein Verlierer" ($null -eq (Get-ConflictLoserRel $queue $r))
     Check "lokaler Pfad ausserhalb des Roots wird verworfen" ($null -eq (Get-ConflictLoserRel ($p1 -replace 'Meine Ablage', 'Andere Ablage') $r))
+
+    # --- conflict name ---------------------------------------------------------
+    Check "Name mit .conflict1 erkannt" (Test-ConflictName "a\b.md.conflict1")
+    Check "Name mit .conflict1.bak nicht erkannt" (-not (Test-ConflictName "a\b.md.conflict1.bak"))
+
+    # --- sweep -Scan: what counts as redundant (sweep-conflicts.ps1) -----------
+    # lifted from the script via the AST: it runs a sweep when executed
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot "sweep-conflicts.ps1"), [ref]$null, [ref]$null)
+    foreach ($name in "Test-InGitHistory", "Get-RedundancyMarker") {
+        $fn = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true) | Select-Object -First 1
+        . ([scriptblock]::Create($fn.Extent.Text))
+    }
+    $root = $scratch   # Test-InGitHistory never walks above $root: no repo here
+    $sw = Join-Path $scratch "sweep"
+    New-Item -ItemType Directory -Force $sw | Out-Null
+    function Pair([string]$name, [string]$orig, [string]$copy) {
+        [IO.File]::WriteAllText((Join-Path $sw $name), $orig)
+        [IO.File]::WriteAllText((Join-Path $sw "$name.conflict1"), $copy)
+        Get-RedundancyMarker (Join-Path $sw "$name.conflict1") "sweep\$name.conflict1"
+    }
+    Check "identische Kopie ist redundant" ((Pair "same.md" "abc" "abc") -eq "SAME-AS-ORIGINAL")
+    Check "Anfangsstueck eines angehaengten Logs ist redundant" ((Pair "log.jsonl" "l1`nl2`nl3`n" "l1`nl2`n") -eq "PREFIX-OF-ORIG")
+    Check "laengere Kopie ist nicht redundant" ($null -eq (Pair "longer.md" "l1`n" "l1`nl2`n"))
+    Check "abweichende Kopie ist nicht redundant" ($null -eq (Pair "diff.md" "alt" "neu"))
+    [IO.File]::WriteAllText((Join-Path $sw "orphan.md.conflict1"), "x")
+    Check "Kopie ohne Original ist nicht redundant" ($null -eq (Get-RedundancyMarker (Join-Path $sw "orphan.md.conflict1") "sweep\orphan.md.conflict1"))
 }
 finally {
     [IO.Directory]::Delete($scratch, $true)

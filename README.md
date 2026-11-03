@@ -241,7 +241,8 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 | `drive-api.ps1` | direct Drive v3 API with the rclone remote's OAuth token: path resolution for the cloud watcher, flat trash listing for the resync guard (~75 s instead of ~90 min) |
 | `filter-rules.ps1` | shared exclude logic for the watchers, derived from `filters.txt` |
 | `upload-ledger.ps1` | echo control between the watchers: own uploads with modtime and size |
-| `conflict-names.ps1` | recognises bisync's `.conflictN` losers: the upload watcher never replays that rename, `sweep-conflicts.ps1` moves the losers out of the corpus |
+| `conflict-names.ps1` | recognises bisync's `.conflictN` losers: the upload watcher never replays that rename, `sweep-conflicts.ps1` moves the losers out of the corpus, the cloud watcher alerts (`conflict-incoming`) when one arrives that our own sweep did not log – another machine made it |
+| `sweep-conflicts.ps1` | after each run: moves this run's losers to `%LOCALAPPDATA%\drive-sync\conflicts\<stamp>`; then `-Scan` checks every `.conflictN` in the fresh baseline listing, moves the redundant ones (identical, prefix of the original, in git history) and alerts (`conflict-review`) for the rest; `-WhatIf` only reports |
 | `test-conflict-chain.ps1` | tests for the two modules above (no cloud access) |
 | `test-pending-rename.ps1` | an upload pending when its file or folder is renamed follows the new name, and a copy a resync brought back under the old name is recycled; `-Live` runs it against the watcher and the cloud in `Temp\` |
 | `run-hidden.vbs` | windowless task launcher (no console window flashing) |

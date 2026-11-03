@@ -12,6 +12,9 @@
 #    drive letter of "D:\root\rel" as a remote name and never found a file
 #    (since --conflict-resolve newer only Path1 lines carry a loser).
 
+# Does the path carry bisync's conflict-loser suffix (<name>.conflictN)?
+function Test-ConflictName([string]$rel) { return $rel -match '\.conflict\d+$' }
+
 # Is the rename $oldRel -> $newRel bisync parking a conflict loser, i.e. the
 # new name is exactly the old one plus ".conflict<N>"?
 function Test-ConflictLoserRename([string]$oldRel, [string]$newRel) {
