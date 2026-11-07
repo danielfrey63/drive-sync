@@ -41,6 +41,14 @@ trap { try { Add-Content $logFile "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') FAT
 $statusFile = Join-Path $stateDir "watcher-status.json"
 $lockFile = Join-Path $stateDir "watcher.lock"
 $bisyncLock = Join-Path $stateDir "sync.lock"
+
+# --- single instance, before the slow start-up (single-instance.ps1) ---------
+. (Join-Path $PSScriptRoot "single-instance.ps1")
+$script:instance = Enter-SingleInstance "watch-drive" $lockFile
+if (-not $script:instance) {
+    Add-Content $logFile "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') another watcher (PID $(Get-Content $lockFile -TotalCount 1 -ErrorAction SilentlyContinue)) is active - exiting" -ErrorAction SilentlyContinue
+    exit 0
+}
 $lastSeenFile = Join-Path $stateDir "watcher-lastseen.txt"
 $maxDeletes = $DriveSyncConfig.MaxDeletes
 $journalDrops = [bool]$DriveSyncConfig.JournalDroppedDeletes
@@ -92,16 +100,6 @@ function Write-EventLog([string[]]$lines) {
     }
     catch {}
 }
-
-# --- single instance --------------------------------------------------------
-if (Test-Path $lockFile) {
-    $other = Get-Content $lockFile -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($other -and (Get-Process -Id $other -ErrorAction SilentlyContinue)) {
-        Write-Log "another watcher (PID $other) is active - exiting"
-        exit 0
-    }
-}
-Set-Content $lockFile $PID
 
 # --- journal for deletes the cap drops --------------------------------------
 . (Join-Path $PSScriptRoot "delete-journal.ps1")
