@@ -45,6 +45,13 @@ $BackupConfig = @{
     # re-chunks the whole tree; higher read concurrency shortens that phase
     ReadConcurrency = 8
 
+    # How many "could not read the shadow copy" errors make a run's tree
+    # incomplete rather than merely spotty. Windows evicts the oldest shadow
+    # copy of a volume to stay under its storage limit, restic's included, and
+    # each directory lost that way drops its whole subtree. One or two can be
+    # an ordinary locked file; a dozen means the snapshot is gone.
+    VssLossErrorLimit = 10
+
     MaintenanceDay = [DayOfWeek]::Sunday   # prune + check run on this weekday
     CheckSubset  = "2%"                    # share of pack data read back per check
     # Who owns prune/check when several machines back up into the SAME

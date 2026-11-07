@@ -187,6 +187,15 @@ The upload watcher pushes local changes to the cloud within a minute, so by the 
 
 Most likely the backup tells you before you notice anything else. After every run the tripwire compares the fresh snapshot against its own chain (see [README](README.md#ransomware-tripwire)); a wall of rewritten files, a wall of new ones, or a corpus that suddenly shrank raises `!! BACKUP ANOMALY - maintenance halted` instead of `Backup done`, and **latches**: `forget`, `prune` and `check` are already disabled by the time you read this, so the automation is not aging out your last clean snapshots while you work. Leave the latch alone until the incident is settled.
 
+**Rule out the harmless cause of a shrink alarm first: a lost shadow copy.** Windows evicts the oldest shadow copy of a volume when a new one (an MSI's restore point, say) would push that volume over its shadow-storage limit, restic's included, and every directory restic had not reached yet drops out of the snapshot. That looks like mass deletion, and the *next* run looks like mass rewriting when the files come back as new. Three things tell it apart from an attack, and all three are in the run's log: errors naming `HarddiskVolumeShadowCopy` ("Das Gerät ist nicht bereit"), `VSS_E_OBJECT_NOT_FOUND` when restic releases the snapshot, and a `volsnap` event 33 in the Windows system log at the same minute:
+
+```powershell
+Select-String "$env:LOCALAPPDATA\drive-sync\logs\backup-*.log" -Pattern "HarddiskVolumeShadowCopy|VSS_E_OBJECT_NOT_FOUND"
+Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='volsnap'; Id=33}
+```
+
+Since 2026-11-07 the pipeline catches this itself: it removes the truncated snapshot, retries the source once, and reports `backup FAILED: shadow copy lost twice` rather than a tripwire alarm. An alarm on an *older* snapshot can still have this cause — 2026-11-05 is the worked example in the [README](README.md#ransomware-tripwire).
+
 If you suspect an attack but no alarm fired — it started after the last run, or it crept in below the thresholds — check by hand from a clean machine:
 
 ```powershell

@@ -31,6 +31,7 @@ C:\  +  D:\Meine Ablage
 | `restic-excludes.txt` | what stays out (see *Decisions*) |
 | `install-backup-task.ps1` | registers the elevated scheduled task (idempotent). Starts pwsh windowless through `ai-toolbox/tools/run-hidden` (sibling checkout, `-ToolboxPath` overrides) — `-WindowStyle Hidden` alone flashes a console window on every run |
 | `backup-status.ps1` | task/process/log status, latch state, repository size and upload rate measured on the box (restic logs no progress when not on a terminal). `-Audit` replays the tripwire over the whole snapshot history |
+| `test-vss-loss.ps1` | tests the "shadow copy deleted mid-run" guard against canned and real restic output; runs offline |
 
 ## Ransomware tripwire
 
@@ -54,6 +55,15 @@ Thresholds are static rather than a rolling baseline, because a rolling baseline
 ```
 
 **Changing `restic-excludes.txt` trips the shrink leg**, and that is correct rather than a bug: files leaving the backup look exactly like files being deleted. The first run after an exclude change will therefore alarm once. Check that the numbers match what you excluded, then release the latch. On 2026-09-12 the shape patterns dropped the C: chain from 763'402 to 574'309 files and the alarm read `corpus shrank 24.77%` — expected, and a useful confirmation that the detector works on real data.
+
+**A lost shadow copy is not ransomware, and the pipeline now says which it is.** Windows deletes the oldest shadow copy of a volume when a new one would push that volume over its shadow-storage limit, and it does not care that restic is reading from that one. Every directory restic has not reached yet then fails to open, its whole subtree drops out silently, and restic still saves the snapshot and exits 3 — "some source files could not be read". On 2026-11-05 an MSI installing the Visual C++ 2022 redistributables created a restore point at 20:24:41, which evicted restic's snapshot taken at 20:19, and the C: run stored 61'885 of 351'625 files while the toast said done. The tripwire caught it as `corpus shrank 82.40%`, and the following run as `290'105 new files` — correct, but it reads like an attack. The per-source loop therefore checks the errors that name the shadow-copy device (`HarddiskVolumeShadowCopy`, threshold `VssLossErrorLimit`, or a conclusive `VSS_E_OBJECT_NOT_FOUND` when releasing it), **removes the truncated snapshot** so nobody restores from it, and retries the source once with a fresh shadow copy. Only if that attempt is lost too does the run report `backup FAILED: shadow copy lost twice`. If this starts happening regularly, raise the limit from an elevated console:
+
+```powershell
+vssadmin list shadowstorage
+vssadmin resize shadowstorage /for=C: /on=C: /maxsize=60GB
+```
+
+`test-vss-loss.ps1` covers the detector and the retry loop, including the real output of the 2026-11-05 run; it touches neither restic nor the repository.
 
 After changing a threshold, run `.\backup\backup-status.ps1 -Audit`. It replays the detector over every snapshot in the repository and prints the four rates plus a verdict per snapshot. A calibrated detector is silent on the entire history — if it is not, the thresholds are wrong, and you find out before arming it rather than at 03:00 on a Sunday.
 
@@ -185,6 +195,7 @@ Step-by-step recovery scenarios — lost file, dead disk, new machine, ransomwar
 - **`Permission denied ()` on port 23** although the key is right — SSH-Support is disabled in the Console.
 - **`backup finished with unreadable files (rc=3)`** — look at the error summary at the end of the log. *access denied* and *locked file* mean the run was not elevated; *cloud placeholder* means dehydrated OneDrive/iCloud files.
 - **`Backup postponed`** — the box did not answer on TCP, so the machine was asleep or off the network. Nothing to do; the next slot continues. The log line carries the streak, and four in a row turn into a failure. In the log this looks like `ssh command exited: exit status 255` on the lock operations, often together with `failed to delete VSS snapshot: VSS error: async operation pending` — that orphan is released by Windows, `vssadmin list shadows` only shows the persistent `ClientAccessibleWriters` restore points.
+- **`backup FAILED: shadow copy lost twice`** — Windows deleted restic's shadow copy mid-run, twice in a row, so that source has no usable snapshot from this run. The truncated ones were removed automatically. Nothing to do: the next slot retries. If it keeps happening, raise the volume's shadow-storage limit (see the tripwire section) and check what else is creating restore points at that hour (`Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='System Restore'}`).
 - **`!! BACKUP ANOMALY - maintenance halted`** — the tripwire fired; the toast and the log name the leg and the numbers. If you know the cause (a large import, a bulk delete, a reorg), release with `.\run-backup.ps1 -ClearAnomaly`. If you do not, treat it as [scenario 5](RESTORE.md#5-ransomware) and cut the machine off the network first. Backups continue either way; only `forget`/`prune`/`check` are paused.
 - **Repository locked after a crash** — `restic unlock -o $o` (only when no other restic is running; check the task).
 - **`another backup is running`** in the log although none is — stale lock with a dead PID is taken over automatically; if the PID is alive, wait.

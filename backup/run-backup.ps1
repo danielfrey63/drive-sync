@@ -132,7 +132,38 @@ try {
     # restart re-reads the whole tree (index dedup prevents re-upload, but the
     # chunking takes hours) - completing the small tree first ends that phase
     # for it, instead of one giant snapshot that never completes.
+    #
+    # A shadow copy can be pulled out from under a running restic: Windows
+    # deletes the OLDEST shadow copy of a volume when a new one (an MSI's
+    # restore point, say) would push the volume over its shadow-storage limit,
+    # and it does not care that restic is reading from that one. Every
+    # directory restic has not visited yet then fails to open, its whole
+    # subtree is silently dropped, and restic still SAVES the snapshot and
+    # exits 3 - "some files could not be read". On 2026-11-05 that turned a
+    # C:\ run into a snapshot holding 61'885 of 351'625 files, reported as
+    # done. These errors name the shadow-copy device, which is what tells them
+    # apart from an ordinary locked or denied file.
+    function Test-VssLost([string[]]$lines, [int]$limit) {
+        $hits = @($lines | Where-Object { "$_" -match '^error' -and "$_" -match 'HarddiskVolumeShadowCopy' })
+        if ($hits.Count -ge $limit) { return $hits.Count }
+        # the release failing with "object not found" is the same loss seen from
+        # the other end, and it needs no threshold to be conclusive
+        if ($lines | Where-Object { "$_" -match 'VSS_E_OBJECT_NOT_FOUND' }) { return [Math]::Max($hits.Count, 1) }
+        return 0
+    }
+    # The truncated snapshot of an aborted attempt must not stay selectable:
+    # restoring from it looks complete and silently misses most of the tree.
+    function Remove-TruncatedSnapshot([string[]]$lines) {
+        $ids = @($lines | ForEach-Object { if ("$_" -match '^snapshot ([0-9a-f]{8}) saved') { $Matches[1] } })
+        foreach ($id in $ids) {
+            & $cfg.Restic forget $id @common 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) { Log "removed truncated snapshot $id (incomplete tree)" }
+            else { Log "WARN could not remove truncated snapshot $id - do not restore from it" }
+        }
+    }
+
     $out = @(); $rc = 0
+    $vssAborted = @()   # sources whose tree stayed incomplete even after a retry
     foreach ($source in $cfg.Sources) {
         $args = @("backup", $source
             "--exclude-file", $cfg.ExcludeFile
@@ -147,9 +178,27 @@ try {
         Log "backup start [$source] (vss=$useVss dryrun=$DryRun) -> $($cfg.Repository)"
         $waits = @($cfg.RetryWaitsSec)
         $attempts = $waits.Count + 1
+        $vssRetried = $false
         for ($attempt = 1; $attempt -le $attempts; $attempt++) {
             $srcOut = & $cfg.Restic @args @common 2>&1 | Tee-Object -FilePath $log -Append
             $rc = $LASTEXITCODE
+            $vssLost = 0
+            if ($rc -eq 3 -and $useVss -and -not $DryRun) { $vssLost = Test-VssLost @($srcOut) $cfg.VssLossErrorLimit }
+            if ($vssLost -gt 0) {
+                Log "backup [$source] ABORTED: the shadow copy was deleted mid-run ($vssLost error(s) on it) - the tree is incomplete"
+                Remove-TruncatedSnapshot @($srcOut)
+                # one retry, and it does not eat the transport ladder: a fresh
+                # shadow copy is very likely to survive, because the restore
+                # point that evicted ours has been written by now
+                if (-not $vssRetried) {
+                    $vssRetried = $true
+                    Log "backup [$source] retrying once with a fresh shadow copy"
+                    $attempt--
+                    continue
+                }
+                $vssAborted += $source
+                break
+            }
             if ($rc -in 0, 3) { break }
             if ($attempt -eq $attempts) { break }
 
@@ -182,6 +231,13 @@ try {
     if ($errors.Count -gt 0) {
         Log "backup error summary ($($errors.Count) files):"
         $errors | Group-Object | Sort-Object Count -Descending | ForEach-Object { Log ("  {0,6}  {1}" -f $_.Count, $_.Name) }
+    }
+    # A tree we could not read whole is not a backup of that tree. Say so
+    # instead of toasting "done": the tripwire would flag it afterwards, but as
+    # a shrink alarm, which reads like ransomware rather than a lost snapshot.
+    if ($vssAborted.Count -gt 0) {
+        Fail ("backup FAILED: shadow copy lost twice for " + ($vssAborted -join ", ") +
+            " - no usable snapshot for that source this run, the next run retries") 3
     }
     # 3 = some source files could not be read; the snapshot is still complete for the rest
     if ($rc -eq 3) { Log "backup finished with unreadable files (rc=3)" }
