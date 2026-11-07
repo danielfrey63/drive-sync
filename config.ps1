@@ -4,6 +4,15 @@
 # config.local.ps1 next to this file (gitignored, see config.local.ps1.example)
 # and override individual entries there.
 
+# rclone writes UTF-8. PowerShell decodes native output with the console code
+# page, which is ibm850 in the hidden scheduled tasks: "Aufträge" came back as
+# "AuftrÃ¤ge". On 2026-11-07 the resync guard therefore missed the live cloud
+# copies of exactly the 5 candidates with ä or → in their names and recycled
+# their local files (the resync downloaded them again). Every script that
+# parses rclone output dot-sources this file, so set it once here.
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+
 $DriveSyncConfig = @{
     # local mirror root and the rclone remote it syncs with
     LocalRoot     = "D:\Meine Ablage"
