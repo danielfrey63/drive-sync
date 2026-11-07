@@ -73,6 +73,13 @@
 - coverage-e2e/**
 - test-results/**
 
+# WordPress migration dump of 2022 (gitignored in server-landscape, local is
+# enough). It held 98 image pairs whose names differ only in NFC vs NFD
+# spelling of "é" - two files for NTFS, one for Drive: every run logged
+# "Duplicate object found", and a rename there would abort the bisync.
+# The NFC twins went to the conflict archive on 2026-11-07.
+- /Develop/danielfrey63/server-landscape/14-wordpress/migration/data/**
+
 # DriveFS pointer files for Google-native docs (the docs themselves stay
 # cloud-only via --drive-skip-gdocs; pointers stay local for the gdrive skill)
 - *.gdoc

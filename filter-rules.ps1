@@ -9,11 +9,19 @@ function Get-ExcludeRules([string]$filtersFile) {
         Exts     = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         Names    = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         Prefixes = @()
+        # "/a/b/**": one subtree, anchored at the root. Until 2026-11-07 these
+        # landed in Dirs as "/a/b", matched no single segment, and the
+        # watchers synced what bisync excluded.
+        Anchored = @()
     }
     foreach ($line in Get-Content $filtersFile) {
         if ($line -notmatch '^\s*-\s+(.+)$') { continue }
         $pat = $Matches[1].Trim()
-        if ($pat -match '^(.+)/\*\*$') { [void]$rules.Dirs.Add($Matches[1]) }
+        if ($pat -match '^/(.+)/\*\*$') {
+            # rclone escapes [ and ] in patterns; the path itself has none
+            $rules.Anchored += (($Matches[1] -replace '\\([\[\]])', '$1') -replace '/', '\')
+        }
+        elseif ($pat -match '^(.+)/\*\*$') { [void]$rules.Dirs.Add($Matches[1]) }
         elseif ($pat -match '^\*(\.[A-Za-z0-9]+)$') { [void]$rules.Exts.Add($Matches[1]) }
         elseif ($pat.EndsWith('*')) { $rules.Prefixes += $pat.TrimEnd('*') }
         elseif ($pat -notmatch '[\*\[\]]') { [void]$rules.Names.Add($pat) }
@@ -22,6 +30,9 @@ function Get-ExcludeRules([string]$filtersFile) {
 }
 
 function Test-Excluded($rules, [string]$relPath) {
+    foreach ($a in $rules.Anchored) {
+        if ($relPath.StartsWith("$a\", [System.StringComparison]::OrdinalIgnoreCase) -or $relPath -ieq $a) { return $true }
+    }
     $segs = $relPath -split '\\'
     for ($i = 0; $i -lt $segs.Count - 1; $i++) { if ($rules.Dirs.Contains($segs[$i])) { return $true } }
     $base = $segs[-1]
