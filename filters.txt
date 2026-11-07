@@ -65,6 +65,14 @@
 - .cache/**
 - .gradle/**
 
+# Generated test output: every test run rewrites it wholesale. On 2026-11-07
+# a test run in markdown-review during the nightly bisync turned 12 such files
+# into conflict copies, and with the duplicate watchers of 05.-07.11. they made
+# up most of the Drive duplicates. All hits in the corpus are code projects.
+- coverage/**
+- coverage-e2e/**
+- test-results/**
+
 # DriveFS pointer files for Google-native docs (the docs themselves stay
 # cloud-only via --drive-skip-gdocs; pointers stay local for the gdrive skill)
 - *.gdoc

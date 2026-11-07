@@ -87,6 +87,18 @@ foreach ($w in $watchers) {
         }
         continue
     }
+    # The lock file alone is not proof: a watcher still in its start-up has
+    # not written it yet. On 2026-11-05 the watchdog read pre-reboot PIDs 7 s
+    # after the logon task had started both watchers and started a second
+    # pair. Look for a live process of the script before starting another
+    # (second line of defence; single-instance.ps1 is the first).
+    $leaf = [IO.Path]::GetFileName($w.Script)
+    $running = @(Get-CimInstance Win32_Process -Filter "Name='pwsh.exe' OR Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and $_.CommandLine.Contains($leaf) -and $_.ProcessId -ne $PID })
+    if ($running.Count -gt 0) {
+        Write-Log "'$($w.Task)' lock stale (PID: $($pid_ ?? 'none')) but $leaf runs as PID $($running[0].ProcessId) - not restarting"
+        continue
+    }
     Write-Log "'$($w.Task)' not running (lock PID: $($pid_ ?? 'none')) - restarting"
     Remove-Item $w.Lock -Force -Confirm:$false -ErrorAction SilentlyContinue
     try { Start-ScheduledTask -TaskName $w.Task -ErrorAction Stop }

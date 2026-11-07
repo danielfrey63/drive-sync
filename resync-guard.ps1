@@ -226,6 +226,27 @@ if ($LASTEXITCODE -ne 0) {
 }
 foreach ($o in (($liveJson -join "`n") | ConvertFrom-Json)) { $live[$o.Path] = $true }
 $revive = @($candidates | Where-Object { -not $live.ContainsKey($_) })
+
+# Plausibility before anything irreversible. A returned path that matches no
+# candidate means both sides spell names differently - on 2026-11-07 rclone's
+# UTF-8 was read as ibm850 and the 5 candidates with a or an arrow in their
+# names looked dead although live; their local files were recycled. And every
+# path about to be recycled is confirmed dead on its own: few by nature, and
+# the one step that cannot be undone from here.
+$candSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$candidates, [System.StringComparer]::OrdinalIgnoreCase)
+$stray = @($live.Keys | Where-Object { -not $candSet.Contains($_) })
+if ($stray.Count -gt 0) {
+    Write-Log "live check unreliable: $($stray.Count) returned path(s) match no candidate, e.g. '$($stray[0])' - aborting"
+    exit 2
+}
+$sep = if ($remote.EndsWith(":")) { "" } else { "/" }
+foreach ($r in $revive) {
+    $one = & $rcloneExe lsjson "$remote$sep$r" --stat @($DriveSyncConfig.Pacer) 2>$null
+    if ($LASTEXITCODE -eq 0 -and $one) {
+        Write-Log "live check unreliable: '$r' is live on a single lookup - aborting"
+        exit 2
+    }
+}
 Write-Log "live in cloud again (kept): $($candidates.Count - $revive.Count); would be revived by resync: $($revive.Count)"
 
 # --- 4. recycle -----------------------------------------------------------------

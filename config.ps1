@@ -51,6 +51,9 @@ $DriveSyncConfig = @{
     # a normal nightly run refuses to start once the last success is older
     # than this; only a -Resync (through resync-guard.ps1) gets past it
     MaxBaselineAgeDays = 3
+    # alert once a run's log names more paths with two objects ("Duplicate
+    # object found") than this; 0 = any
+    AlertDuplicateObjects = 0
     # the watchdog alerts once a watcher needed this many restarts within
     # an hour (it dies right after start - missing file, parse error, ...)
     AlertWatcherRestarts = 3

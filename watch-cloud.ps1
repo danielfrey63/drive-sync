@@ -276,7 +276,20 @@ try {
                         $foreign = @($batch | Where-Object { Test-ConflictName $_ })
                         if ($foreign.Count -gt 0) {
                             $known = if (Test-Path -LiteralPath $sweepLog) { Get-Content -LiteralPath $sweepLog -Raw } else { "" }
-                            $foreign = @($foreign | Where-Object { -not $known.Contains($_) })
+                            # A run that aborts after "Renaming Path2 copy" never
+                            # gets its losers into conflicts.log - they arrive
+                            # here and looked foreign (2026-11-07, 12 copies in
+                            # markdown-review). The newest bisync log names them.
+                            $ours = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+                            $lastRun = Get-ChildItem (Join-Path $stateDir "logs") -Filter "bisync-*.log" -ErrorAction SilentlyContinue |
+                                Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                            if ($lastRun) {
+                                foreach ($m in (Select-String -LiteralPath $lastRun.FullName -Pattern 'Renaming Path[12] copy')) {
+                                    $p = Get-ConflictLoserRel $m.Line $root
+                                    if ($p) { [void]$ours.Add($p) }
+                                }
+                            }
+                            $foreign = @($foreign | Where-Object { -not $known.Contains($_) -and -not $ours.Contains($_) })
                         }
                         if ($foreign.Count -gt 0) {
                             Write-Log "WARN $($foreign.Count) conflict cop(ies) arrived from the cloud: $(($foreign | Select-Object -First 3) -join ', ')"

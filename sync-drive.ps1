@@ -275,6 +275,22 @@ try {
                 }
             }
         }
+
+        # Two objects under one path - in Drive (duplicate uploads) or locally
+        # (the same name in NFC and NFD form, which NTFS keeps apart). bisync
+        # only notes them and moves on, until a rename hits one and the run
+        # aborts for a resync. From 05.11. the count grew every night
+        # (101, 391, 534) and nobody saw it before the abort on 06.11.
+        $dupes = @(Select-String -LiteralPath $logFile -Pattern ': Duplicate object found' -ErrorAction SilentlyContinue |
+            ForEach-Object { if ($_.Line -match 'NOTICE: (.+?): Duplicate object found') { $Matches[1] } } | Sort-Object -Unique)
+        $dupeMax = if ($null -ne $DriveSyncConfig.AlertDuplicateObjects) { [int]$DriveSyncConfig.AlertDuplicateObjects } else { 0 }
+        if ($dupes.Count -gt $dupeMax) {
+            $where = ($dupes | ForEach-Object { ($_ -split '/')[0..2] -join '/' } | Group-Object | Sort-Object Count -Descending |
+                Select-Object -First 3 | ForEach-Object { "$($_.Name) ($($_.Count))" }) -join ', '
+            Send-DriveSyncAlert -Key "drive-duplicates" -Title "Drive-Sync: doppelte Objekte" `
+                -Body "$($dupes.Count) Pfad(e) mit zwei Objekten, v.a. $where. Ein Umbenennen dort bricht den Nachtlauf ab. Log: $logFile" | Out-Null
+        }
+        elseif ($exit -eq 0) { Clear-DriveSyncAlert "drive-duplicates" }
     }
 
     if ($exit -ne 0) { Write-Warning "bisync failed with exit code $exit - see $logFile" }
