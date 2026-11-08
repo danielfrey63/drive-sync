@@ -245,6 +245,7 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 | `sweep-conflicts.ps1` | after each run: moves this run's losers to `%LOCALAPPDATA%\drive-sync\conflicts\<stamp>`; then `-Scan` checks every `.conflictN` in the fresh baseline listing, moves the redundant ones (identical, prefix of the original, in git history) and alerts (`conflict-review`) for the rest; `-WhatIf` only reports |
 | `test-conflict-chain.ps1` | tests for the two modules above (no cloud access) |
 | `test-pending-rename.ps1` | an upload pending when its file or folder is renamed follows the new name, and a copy a resync brought back under the old name is recycled; `-Live` runs it against the watcher and the cloud in `Temp\` |
+| `test-filters.ps1` | the watchers' exclude logic (`filter-rules.ps1`) must give rclone's answer for a sample of every rule in `filters.txt` – run it after each filter change (local only) |
 | `run-hidden.vbs` | windowless task launcher (no console window flashing) |
 | `install-sync-task.ps1`, `install-watcher-task.ps1` | register the scheduled tasks (idempotent) |
 | `uninstall.ps1` | stops the watchers and removes all four tasks (`-RemoveState` also deletes the state dir) |
@@ -252,6 +253,13 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 | `howto-google-oauth.md` | how to create your own Google OAuth client id |
 | `backup/run-backup.ps1`, `backup/backup-config.ps1`, `backup/restic-excludes.txt` | restic off-site backup to the Hetzner Storage Box (backup → forget → prune/check) |
 | `backup/install-backup-task.ps1` | registers the daily elevated backup task (idempotent) |
+
+## Pitfalls when changing the scripts
+
+- **Unicode names: compare ordinally.** The same accented letter can be stored composed (NFC, `é` = U+00E9) or decomposed (NFD, `e` + U+0301). NTFS keeps both spellings as two files, Drive and rclone treat them as one name. PowerShell's `-eq`, `-ceq` and `-ieq` call such strings equal, so a check built on them cannot see the difference – on 2026-11-07 it hid 98 NFC/NFD pairs. Use `[string]::CompareOrdinal`, or collections with `[StringComparer]::Ordinal`/`OrdinalIgnoreCase`, wherever two names must be told apart.
+- **rclone output is UTF-8.** `config.ps1` sets the console encoding for every script; without it the hidden tasks decode rclone's output as ibm850 and names with umlauts or arrows no longer match (the guard recycled 5 live files that way on 2026-11-07).
+- **Filter changes need a resync**, and `test-filters.ps1` afterwards: bisync tracks the filter file, and the watchers read the same file through their own parser.
+- **Write files with CRLF.** `githooks/check-text.sh` rejects anything else (run `install-git-hook.ps1` once per clone); the Write tool and heredocs produce LF.
 
 ## License
 
