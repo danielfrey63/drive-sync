@@ -122,20 +122,28 @@ Write-Host "`nBericht (derselbe Aufruf wie im Wrapper):"
 $sw = [Diagnostics.Stopwatch]::StartNew()
 $rep = @(Write-SpliceReport $localPath $DriveSyncConfig.Remote $tmp)
 $sw.Stop()
+# the report claims but keeps the batch: a run that aborts after it must not
+# lose the deletes (2026-11-06: 909 entries emptied, then the bisync aborted)
+$kept = @(Read-DroppedDeletes $tmp "path1").Count
+# the next run after an abort sees the same batch again
+$rep2 = @(Write-SpliceReport $localPath $DriveSyncConfig.Remote $tmp)
+# only a successful run clears it (sync-drive.ps1)
+Clear-DroppedDeletes $tmp "path1"
 $leftover = @(Read-DroppedDeletes $tmp "path1").Count
 # the nightly task runs hidden: the file is the only place the numbers survive
 $logged = @(Get-Content (Join-Path $tmp "splice-report.log") -ErrorAction SilentlyContinue)
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 # the one ready candidate exists nowhere, so the metadata lookup must come back
 # "gone" and nothing may end up in the splice set
-$ok3 = $rep.Count -eq 1 -and $rep[0].Ready.Count -eq 1 -and $leftover -eq 0 `
+$ok3 = $rep.Count -eq 1 -and $rep[0].Ready.Count -eq 1 -and $kept -eq $cases.Count -and $rep2.Count -eq 1 -and $rep2[0].Total -eq $cases.Count -and $leftover -eq 0 `
     -and $rep[0].Gone -eq 1 -and $rep[0].Splice.Count -eq 0
-Write-Host "Metadaten: $($rep[0].Splice.Count) brauchbar, $($rep[0].Gone) nirgends mehr, $($rep[0].Conflict) veraendert"
-Write-Host "$(if ($ok3) { 'PASS' } else { 'FAIL' }) - ein Seitenbericht, 1 Kandidat, nirgends auffindbar, Journal geleert"
+Write-Host "Metadaten: $($rep[0].Splice.Count) brauchbar, $($rep[0].Gone) nirgends mehr, $($rep[0].Conflict) veraendert; nach Bericht noch $kept im Journal, nach Erfolg $leftover"
+Write-Host "$(if ($ok3) { 'PASS' } else { 'FAIL' }) - ein Seitenbericht, 1 Kandidat, nirgends auffindbar, Journal bleibt bis zum Erfolg"
 # by content, not by position: the dry runs above log first
 $real = @($logged | Where-Object { $_ -match 'splice report path1: 4 journalled' })
 $dry = @($logged | Where-Object { $_ -match 'dry run, journal kept' })
-$ok6 = $real.Count -eq 1 -and $dry.Count -eq 2
+# two real reports: the run that "aborted" and the one after it
+$ok6 = $real.Count -eq 2 -and $dry.Count -eq 2
 Write-Host "Bericht-Log: $($logged.Count) Zeile(n), davon $($real.Count) echt / $($dry.Count) trocken"
 Write-Host "$(if ($ok6) { 'PASS' } else { 'FAIL' }) - Bericht steht in splice-report.log, Trockenlauf als solcher markiert"
 Write-Host ("Laufzeit des Berichts ueber beide Listings: {0:n1} s" -f $sw.Elapsed.TotalSeconds)

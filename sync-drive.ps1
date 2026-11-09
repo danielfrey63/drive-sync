@@ -190,7 +190,14 @@ try {
         exitCode = $exit; resync = [bool]$Resync; dryRun = [bool]$DryRun; log = $logFile
     }
     $newStatus = [ordered]@{ lastRun = $run }
-    if ($exit -eq 0 -and -not $DryRun) { $newStatus.lastSuccess = $run }
+    if ($exit -eq 0 -and -not $DryRun) {
+        $newStatus.lastSuccess = $run
+        # only now is the batch of dropped deletes the splice report claimed
+        # settled: the bisync has carried them out (or a resync re-baselined
+        # after the guard did). A failed run keeps it for the next run or the
+        # guard - see Write-SpliceReport in bisync-index.ps1.
+        foreach ($side in "path1", "path2") { Clear-DroppedDeletes $stateDir $side }
+    }
     elseif ($status.lastSuccess) { $newStatus.lastSuccess = $status.lastSuccess }
     # retry: a concurrent reader (status check while the run ends) makes
     # Set-Content throw and the whole run would end without a status record

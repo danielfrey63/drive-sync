@@ -185,10 +185,12 @@ function Write-SpliceReport([string]$localRoot, [string]$remote, [string]$stateD
         # peeking reads the journal AND a claim a dead consumer left behind,
         # and moves neither
         $entries = @(Read-DroppedDeletes $stateDir $side -Claim:(-not $Peek))
-        # consumed right away: the batch is in memory and the report changes
-        # nothing, so a retry could not salvage anything. The splice will move
-        # this to after a successful write, where a crash IS worth retrying.
-        if (-not $Peek) { Clear-DroppedDeletes $stateDir $side }
+        # NOT cleared here: the claimed batch stays until the run has
+        # succeeded (sync-drive.ps1 clears it then). On 2026-11-06 the report
+        # emptied 909 entries and the bisync aborted right after - the deletes
+        # never reached the cloud, the guard of the next resync found no
+        # trace of them, and the resync brought 603 files back. A later claim
+        # folds new lines into a batch left behind.
         if ($entries.Count -eq 0) { continue }
         $m = Measure-SpliceCandidates $localRoot $listings $side @($entries.Rel)
 
