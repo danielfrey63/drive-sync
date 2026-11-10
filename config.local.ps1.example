@@ -5,4 +5,5 @@ $DriveSyncConfig.LocalRoot = "C:\Users\me\GoogleDrive"
 $DriveSyncConfig.RemoteName = "gdrive"
 # $DriveSyncConfig.MaxDeletes = 50
 # $DriveSyncConfig.PollSeconds = 60
-# $DriveSyncConfig.BisyncDailyAt = "04:00"
+# the nightly start differs per machine: set it in $DriveSyncMachines (config.ps1),
+# this file reaches every machine when the clone lies inside the synced corpus

@@ -128,9 +128,14 @@ foreach ($e in $expected) {
 }
 if ($tasksOk -eq $expected.Count) { Report 'ok' "scheduled tasks: all $tasksOk registered, enabled and running this copy" }
 
+if (-not $DriveSyncMachine) {
+    Report 'WARN' "this machine ($env:COMPUTERNAME) has no entry in `$DriveSyncMachines (config.ps1): it takes the default nightly start, which another machine may use as well"
+}
 if ($nightTask) {
     $wantAt = "$($DriveSyncConfig.BisyncDailyAt)"
-    $source = if ("$($DriveSyncConfigDefaults.BisyncDailyAt)" -ne $wantAt) { " (config.local.ps1; config.ps1 says $($DriveSyncConfigDefaults.BisyncDailyAt))" } else { "" }
+    $source = if ("$($DriveSyncConfigMachine.BisyncDailyAt)" -ne $wantAt) { " (from config.local.ps1, the machine entry says $($DriveSyncConfigMachine.BisyncDailyAt))" }
+    elseif ($DriveSyncMachine -and $DriveSyncMachine.ContainsKey('BisyncDailyAt')) { " (machine entry $env:COMPUTERNAME)" }
+    else { " (default)" }
     $next = ($nightTask | Get-ScheduledTaskInfo).NextRunTime
     $isAt = if ($next) { $next.ToString('HH:mm') }
     # a start with "Z" or a UTC offset is an instant: the scheduler keeps it
@@ -139,7 +144,7 @@ if ($nightTask) {
     if ($isAt -and $isAt -ne $wantAt) {
         Report 'WARN' "nightly bisync starts at $isAt, the config says $wantAt$source - install-sync-task.ps1 registers the configured time"
     }
-    elseif ($isAt) { Report 'ok' "nightly bisync starts at $isAt, as configured" }
+    elseif ($isAt) { Report 'ok' "nightly bisync starts at $isAt, as configured$source" }
     if ($pinned) {
         Report 'WARN' "nightly bisync: the start is stored as an instant and moves by an hour with daylight saving - install-sync-task.ps1 registers it as wall-clock time"
     }
@@ -147,12 +152,12 @@ if ($nightTask) {
 
 $localConfig = Join-Path $PSScriptRoot "config.local.ps1"
 if (Test-Path $localConfig) {
-    $diff = @($DriveSyncConfigDefaults.Keys | Sort-Object | Where-Object { "$($DriveSyncConfig[$_])" -ne "$($DriveSyncConfigDefaults[$_])" } |
-        ForEach-Object { "$_ = $($DriveSyncConfig[$_]) (default $($DriveSyncConfigDefaults[$_]))" })
+    $diff = @($DriveSyncConfigMachine.Keys | Sort-Object | Where-Object { "$($DriveSyncConfig[$_])" -ne "$($DriveSyncConfigMachine[$_])" } |
+        ForEach-Object { "$_ = $($DriveSyncConfig[$_]) (else $($DriveSyncConfigMachine[$_]))" })
     Report 'info' "config.local.ps1 $(if ($diff) { "sets: $($diff -join '; ')" } else { 'is present and changes nothing' })"
     # "machine-specific" only holds if the file stays on this machine
     $root = "$($DriveSyncConfig.LocalRoot)".TrimEnd('\') + '\'
-    if ($localConfig.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+    if ($diff -and $localConfig.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
         $rel = $localConfig.Substring($root.Length)
         $rules = Get-ExcludeRules (Join-Path $PSScriptRoot "filters.txt")
         if (-not (Test-Excluded $rules $rel)) {

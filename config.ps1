@@ -89,10 +89,25 @@ $DriveSyncConfig = @{
     PacerBurst    = 200
 }
 
-# the defaults as they stand above, for sync-status.ps1 to name what a
-# config.local.ps1 changed
-$DriveSyncConfigDefaults = $DriveSyncConfig.Clone()
+# Values that differ per machine, chosen by $env:COMPUTERNAME. This file is
+# synced to every machine through Drive, and so is a config.local.ps1 next to
+# it: on 2026-11-10 the "machine-specific" 02:00 of the P16 was found in
+# effect on the devbox as well. One table that names every machine cannot be
+# mixed up that way. sync-status.ps1 warns on a machine without an entry.
+$DriveSyncMachines = @{
+    # Windows devbox
+    "DESKTOP-ORT64TC" = @{ BisyncDailyAt = "04:00" }
+    # ThinkPad P16: its $env:COMPUTERNAME = @{ BisyncDailyAt = "02:00" }
+}
 
+# snapshots for sync-status.ps1, to name where a value comes from: the
+# defaults above, then after the machine entry
+$DriveSyncConfigDefaults = $DriveSyncConfig.Clone()
+$DriveSyncMachine = $DriveSyncMachines[$env:COMPUTERNAME]
+if ($DriveSyncMachine) { foreach ($k in @($DriveSyncMachine.Keys)) { $DriveSyncConfig[$k] = $DriveSyncMachine[$k] } }
+$DriveSyncConfigMachine = $DriveSyncConfig.Clone()
+
+# still honoured, for a value that must not be in the repository at all
 $__localConfig = Join-Path $PSScriptRoot "config.local.ps1"
 if (Test-Path $__localConfig) { . $__localConfig }
 

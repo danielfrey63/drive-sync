@@ -82,7 +82,7 @@ Three tiers, each covering the blind spots of the one above:
 # 1. rclone remote (type drive, scope drive, your client id/secret)
 rclone config              # create remote "gdrive"; then: rclone lsd gdrive:
 
-# 2. adjust config.local.ps1 (copy from config.local.ps1.example) and filters.txt
+# 2. add this machine to $DriveSyncMachines in config.ps1, adjust filters.txt
 
 # 3. one-time baseline - reconciles both sides completely, can take hours
 pwsh -File sync-drive.ps1 -Resync
@@ -99,7 +99,7 @@ All installers are idempotent: re-running updates task definitions without distu
 
 ## Configuration
 
-Defaults live in [`config.ps1`](config.ps1); machine-specific overrides go into `config.local.ps1` (gitignored, see the [example](config.local.ps1.example)).
+Defaults live in [`config.ps1`](config.ps1). Values that differ per machine go into its table `$DriveSyncMachines`, keyed by `$env:COMPUTERNAME`; `sync-status.ps1` warns on a machine without an entry. A `config.local.ps1` (gitignored, see the [example](config.local.ps1.example)) is still read last, but only for what must not be in the repository: when this clone lies inside the synced corpus, Drive carries that file to every machine, so it is not machine-specific there.
 
 | Key | Meaning | Default |
 | --- | --- | --- |
@@ -147,7 +147,7 @@ Every machine keeps its own bisync listings, locks, ledger and Changes cursor, s
 
 1. **Nothing stale on the new machine before the first resync.** `--resync` merges and never deletes: any file that exists only locally is uploaded again, including everything that was deliberately deleted elsewhere since that copy was made (676 revived files on the first attempt). `sync-drive.ps1 -Resync` therefore runs `resync-guard.ps1` first: the Drive trash is the deletion log — every local file that matches a trashed cloud file by path, is not newer than that tombstone (equal modtime = the deleted copy itself, older = it never saw the last edit before the deletion) and is not live in the cloud again goes to the recycle bin before the resync starts (`-DryRun` reports only, `-SkipResyncGuard` bypasses). First, though, the guard carries out the local deletes the upload watcher only journalled beyond its delete cap (`dropped-deletes-path1.txt`) – the same step every normal run starts with (`journal-replay.ps1`): they never reached the cloud and are in no trash, so after a blocked nightly run the resync would download every one of them again (84 files on 2026-10-20). A journalled path is trashed in the cloud only if it is still gone locally and its cloud copy is not newer than the delete. The cloud-side journal (`dropped-deletes-path2.txt`) needs no step of its own here: those files are in the Drive trash, which is exactly what the tombstone rule reads. Reach is the trash retention of 30 days; for older stale copies start from an empty local root or run `rclone check "<local>" gdrive: --one-way --missing-on-dst stale.txt --filter-from filters.txt` and delete what it lists. If a resync did run unguarded, hunt the revived files on the *other* machine too: its cloud watcher downloads them within minutes, so they show up in the next nightly log as `File is new` on both paths — cross-check that set against the trash (path + modtime), not just what is missing locally (245 files were missed that way on 2026-09-25).
 2. **Resync with `-ResyncMode newer`.** The default (`path1`, local wins) would let an older local copy overwrite newer cloud versions.
-3. **Offset the nightly runs** (`BisyncDailyAt` in `config.local.ps1`, e.g. `02:00` vs `04:00`). Two bisyncs modifying the same remote at once are not safe; the final listing validation fails on the other machine's writes.
+3. **Offset the nightly runs** (`BisyncDailyAt` in the machine's entry of `$DriveSyncMachines`, e.g. `02:00` vs `04:00`), then run `install-sync-task.ps1` on that machine. Two bisyncs modifying the same remote at once are not safe; the final listing validation fails on the other machine's writes.
 
 Also: unlock BitLocker data drives automatically (`Enable-BitLockerAutoUnlock -MountPoint D:`, drive must be unlocked to run it) — a scheduled run against a locked drive aborts critically after grinding through every file; the root guard in `sync-drive.ps1` now waits up to 4 h for the drive instead. And `.git` directories are excluded from the corpus, so repos on the second machine need `git init -b main` + remote + `git reset --hard <remote>/main` once.
 
@@ -250,7 +250,7 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 
 | File | Purpose |
 | --- | --- |
-| `config.ps1` | central configuration (defaults); override per machine via `config.local.ps1` |
+| `config.ps1` | central configuration: defaults, and per machine `$DriveSyncMachines` (by `$env:COMPUTERNAME`); `config.local.ps1` is read last |
 | `sync-drive.ps1` | bisync wrapper (lock, logs, `status.json`); `-Resync` re-baselines, `-DryRun` previews |
 | `watch-drive.ps1` | upload watcher local → cloud (new/update/rename/delete + start-up catch-up) |
 | `watch-cloud.ps1` | download watcher cloud → local (new/update/trash); `-Once` runs a single cycle |
