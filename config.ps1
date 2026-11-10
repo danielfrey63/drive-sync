@@ -21,8 +21,9 @@ $DriveSyncConfig = @{
     # runtime state: logs, locks, cursors, ledger, optional custom rclone build
     StateDir      = Join-Path $env:LOCALAPPDATA "drive-sync"
 
-    # reactive delete cap per flush cycle; larger delete storms are left to
-    # the nightly bisync (safety against sync-amplified mass deletions)
+    # reactive delete cap per flush cycle, counted after verification (a
+    # removed folder is one delete); larger storms are journalled and carried
+    # out before the next bisync (safety against sync-amplified mass deletions)
     MaxDeletes    = 50
 
     # record the paths a MaxDeletes storm dropped and carry them out before the
@@ -51,6 +52,10 @@ $DriveSyncConfig = @{
     # the watchdog alerts once a watcher needed this many restarts within
     # an hour (it dies right after start - missing file, parse error, ...)
     AlertWatcherRestarts = 3
+    # the upload watcher alerts once a file has failed to upload for this long
+    # (locked by another program), or once no upload at all got through for
+    # this long (network, sign-in, quota)
+    AlertUploadStuckMinutes = 60
 
     # daily start time of the reconciliation bisync ("HH:mm"); a full run
     # lists both sides completely, so pick a quiet slot

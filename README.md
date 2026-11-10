@@ -55,7 +55,7 @@ flowchart LR
 
 Three tiers, each covering the blind spots of the one above:
 
-1. **Upload watcher** (`watch-drive.ps1`): a `FileSystemWatcher` batches local events (debounce 15 s / 60 s), uploads via `rclone copy --files-from --no-traverse` (no tree listing), turns renames into server-side `rclone moveto` and verified deletes into Drive-trash moves. On start, a catch-up (`rclone copy --max-age` since the last liveness stamp) closes any coverage gap.
+1. **Upload watcher** (`watch-drive.ps1`): a `FileSystemWatcher` batches local events (debounce 15 s / 60 s), uploads via `rclone copy --files-from --no-traverse` (no tree listing; a file that fails on its own, typically because another program holds it open, is retried after 1, 2, 4 … 30 min instead of blocking the queue, a batch that fails as a whole pauses all uploads for up to 5 min), turns renames into server-side `rclone moveto` and verified deletes into Drive-trash moves. On start, a catch-up (`rclone copy --max-age` since the last liveness stamp) closes any coverage gap.
 2. **Cloud watcher** (`watch-cloud.ps1`): polls the Drive Changes API with a persisted page token (cheap delta calls, no listing), downloads changed files and moves cloud-trashed files to the recycle bin. A ledger of recent own uploads suppresses echo downloads – an event is an echo only if it reports exactly the modtime and size that were uploaded, so a later change of the same path by a second machine still comes down (`upload-ledger.ps1`) –, and a record of local intent — the old name of a rename, a deleted path, written by the upload watcher the moment it reads the event — keeps the cloud watcher from downloading back what is gone locally on purpose while the cloud has not caught up yet.
 3. **Nightly bisync** (`sync-drive.ps1`, default 04:00): full `rclone bisync` as the guarantee layer – conflicts, cloud-side folder renames, anything missed. Watchers defer their flushes while it runs. Before bisync starts, the wrapper carries out the deletes the watchers journalled beyond their cap (`journal-replay.ps1`): bisync only knows its last baseline, so a file created after it and deleted on one side looks new on the other and would be copied straight back. If the journal cannot be carried out, bisync does not start that night (exit 20, alert). Every `EmptyDirCleanupDays` a successful run also prunes empty folder skeletons on the remote (`rclone rmdirs` – bisync only tracks files and never sees directories without any).
 
@@ -100,12 +100,19 @@ Defaults live in [`config.ps1`](config.ps1); machine-specific overrides go into 
 | `MaxDeletes` | reactive delete cap per flush, counted after verification: a removed folder is one delete, a path that is back (upload side) or already gone locally (download side) is none; larger storms are journalled and carried out before the next bisync | `50` |
 | `JournalDroppedDeletes` | record the paths a `MaxDeletes` storm dropped and carry those deletes out before every bisync; without it bisync copies back every dropped path that is younger than its baseline | `$true` |
 | `PollSeconds` | Changes API poll interval | `60` |
+| `AlertRepeatHours` | the same toast alert repeats at most this often | `12` |
+| `AlertStaleSyncHours` | a failing nightly run that needs no resync alerts once the last success is older than this | `36` |
+| `MaxBaselineAgeDays` | a normal run refuses to start on a baseline older than this; only `-Resync` gets past it | `3` |
+| `AlertDuplicateObjects` | alert once a run names more paths with two Drive objects than this | `0` |
+| `AlertWatcherRestarts` | watchdog alert once a watcher needed this many restarts within an hour | `3` |
+| `AlertUploadStuckMinutes` | alert once a file could not be uploaded for this long, or no upload at all got through | `60` |
 | `BisyncDailyAt` | daily start time of the reconciliation bisync (`HH:mm`) | `04:00` |
 | `EmptyDirCleanupDays` | days between remote empty-dir cleanups (`rclone rmdirs` after a successful bisync); `0` disables | `30` |
 | `EmptyDirCleanupExcludes` | paths the cleanup skips (folders whose only content is an unexportable google-native file would look empty) | `/Google Earth/**` |
+| `WatcherLogonDelay` | logon start delay of both watcher tasks (ISO 8601 duration) | `PT3M` |
 | `PacerMinSleep` / `PacerBurst` | Drive pacer tuning (safe with an own client id) | `10ms` / `200` |
 
-Include/exclude rules live in [`filters.txt`](filters.txt) — changing them requires a one-time `sync-drive.ps1 -Resync`.
+Include/exclude rules live in [`filters.txt`](filters.txt) – changing them requires a one-time `sync-drive.ps1 -Resync`.
 
 ## Operations and monitoring
 
@@ -146,6 +153,7 @@ A machine that is away for days must not simply resume: with the lid closed, Win
 | `status.json` | last and last successful bisync run |
 | `logs\bisync-*.log` | one log per bisync run, newest 30 kept |
 | `watcher.log`, `cloud-watcher.log` | watcher logs (rotated), incl. 10-min heartbeats |
+| `watcher-flush.log` | rclone's log of the last upload batch (appended to `watcher.log` after each flush) |
 | `watcher.lock`, `cloud-watcher.lock`, `sync.lock` | PID locks (single instance / bisync precedence) |
 | `watcher-status.json`, `cloud-watcher-status.json` | counters for `sync-status.ps1` |
 | `cloud-watcher-pagetoken.txt` | persisted Changes API cursor; deleting it restarts from "now" (the gap is closed by the next bisync) |
@@ -236,15 +244,17 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 | `watch-drive.ps1` | upload watcher local → cloud (new/update/rename/delete + start-up catch-up) |
 | `watch-cloud.ps1` | download watcher cloud → local (new/update/trash); `-Once` runs a single cycle |
 | `watchdog.ps1` | restarts silently died watchers every 15 min; alerts when one keeps dying right after start |
-| `notify.ps1` | toast alerts that stay in the Action Center (via `ai-toolbox\tools\notify\toast.ps1`), one per condition every `AlertRepeatHours`: bisync needs a resync, bisync failing longer than `AlertStaleSyncHours`, local root unwritable, resync guard failed, a watcher crash-looping (`AlertWatcherRestarts` restarts within an hour, with the cause) |
+| `notify.ps1` | toast alerts that stay in the Action Center (via `ai-toolbox\tools\notify\toast.ps1`), one per condition every `AlertRepeatHours`: bisync needs a resync, bisync failing longer than `AlertStaleSyncHours`, local root unwritable, resync guard failed, a watcher crash-looping (`AlertWatcherRestarts` restarts within an hour, with the cause), uploads failing for `AlertUploadStuckMinutes` |
 | `drive-api.ps1` | direct Drive v3 API with the rclone remote's OAuth token: path resolution for the cloud watcher, flat trash listing for the resync guard (~75 s instead of ~90 min) |
 | `filter-rules.ps1` | shared exclude logic for the watchers, derived from `filters.txt` |
 | `delete-journal.ps1`, `journal-replay.ps1` | the journal of deletes a watcher dropped at `MaxDeletes`, and the step that carries them out before every bisync and before a resync: a locally deleted path goes to the Drive trash unless it is back on disk or its cloud copy changed after the delete; a cloud-deleted path goes to the recycle bin unless it is live in the cloud again or was written locally after the delete |
 | `upload-ledger.ps1` | echo control between the watchers: own uploads with modtime and size |
+| `upload-retry.ps1` | retry bookkeeping of the upload watcher: reads rclone's log of a batch for the paths that failed, parks them with a growing delay and names the ones that stay stuck |
 | `conflict-names.ps1` | recognises bisync's `.conflictN` losers: the upload watcher never replays that rename, `sweep-conflicts.ps1` moves the losers out of the corpus, the cloud watcher alerts (`conflict-incoming`) when one arrives that our own sweep did not log – another machine made it |
 | `sweep-conflicts.ps1` | after each run: moves this run's losers to `%LOCALAPPDATA%\drive-sync\conflicts\<stamp>`; then `-Scan` checks every `.conflictN` in the fresh baseline listing, moves the redundant ones (identical, prefix of the original, in git history) and alerts (`conflict-review`) for the rest; `-WhatIf` only reports |
 | `test-conflict-chain.ps1` | tests for the two modules above (no cloud access) |
 | `test-journal-replay.ps1` | the journal and its replay against a real `rclone bisync` between two scratch folders: the resurrection without the replay, both sides, foreign changes, dry run, an unreachable remote (local only) |
+| `test-upload-retry.ps1` | the module above against real log lines and a real `rclone copy` with one file held open (local only) |
 | `test-pending-rename.ps1` | an upload pending when its file or folder is renamed follows the new name, and a copy a resync brought back under the old name is recycled; `-Live` runs it against the watcher and the cloud in `Temp\` |
 | `test-filters.ps1` | the watchers' exclude logic (`filter-rules.ps1`) must give rclone's answer for a sample of every rule in `filters.txt` – run it after each filter change (local only) |
 | `test-alerts.ps1` | tests for `notify.ps1`; `-Live` shows one real test toast |

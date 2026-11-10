@@ -239,7 +239,41 @@ function Write-Status {
     [ordered]@{
         pid = $PID; lastFlush = (Get-Date).ToString("s")
         uploadedTotal = $uploadedTotal; renamedTotal = $renamedTotal; deletedTotal = $deletedTotal
+        parkedUploads = $parked.Count
     } | ConvertTo-Json | Set-Content $statusFile
+}
+
+# Uploads that keep failing (upload-retry.ps1): a file that fails on its own
+# is parked with a growing delay, a batch that fails as a whole pauses all
+# uploads. Either one raises a toast once it has lasted AlertUploadStuckMinutes
+# and clears it when it is over.
+. (Join-Path $PSScriptRoot "upload-retry.ps1")
+. (Join-Path $PSScriptRoot "notify.ps1")
+$parked = New-UploadParking
+$flushLog = Join-Path $stateDir "watcher-flush.log"
+$uploadFailures = 0
+$uploadFailSince = $null
+$uploadHoldUntil = [datetime]::MinValue
+$stuckMinutes = if ($DriveSyncConfig.AlertUploadStuckMinutes) { [double]$DriveSyncConfig.AlertUploadStuckMinutes } else { 60 }
+# true at start: the first good flush clears an alert a previous instance left
+$script:uploadAlerted = $true
+function Update-UploadAlert {
+    $now = Get-Date
+    $stuck = @(Get-StuckUploads $parked $now $stuckMinutes)
+    if ($stuck.Count -gt 0) {
+        $script:uploadAlerted = $true
+        Send-DriveSyncAlert -Key "upload-stuck" -Title "Drive-Sync: Upload hängt" `
+            -Body "$($stuck.Count) Datei(en) lassen sich seit über $stuckMinutes min nicht hochladen, z.B. $($stuck[0].Rel): $($stuck[0].Reason)" | Out-Null
+    }
+    elseif ($uploadFailSince -and ($now - $uploadFailSince).TotalMinutes -ge $stuckMinutes) {
+        $script:uploadAlerted = $true
+        Send-DriveSyncAlert -Key "upload-stuck" -Title "Drive-Sync: Uploads scheitern" `
+            -Body "Seit $([int]($now - $uploadFailSince).TotalMinutes) min kommt kein Upload durch (Netz, Anmeldung oder Kontingent?). Details in watcher.log." | Out-Null
+    }
+    elseif ($script:uploadAlerted) {
+        $script:uploadAlerted = $false
+        Clear-DriveSyncAlert "upload-stuck"
+    }
 }
 
 # Every path we upload/rename is recorded here so the cloud watcher can tell
@@ -311,8 +345,9 @@ catch { Write-Log "WARN catch-up failed: $($_.Exception.Message)" }
 
 # Advance the liveness stamp only when every queue is empty: pending work
 # lies BEFORE now, and stamping over it would hide it from the next catch-up.
+# A parked upload is pending work too.
 function Update-LastSeen {
-    if (($pending.Count + $renames.Count + $deletes.Count) -eq 0) {
+    if (($pending.Count + $renames.Count + $deletes.Count + $parked.Count) -eq 0) {
         try { Set-Content $lastSeenFile ((Get-Date).ToString("o")) } catch {}
     }
 }
@@ -323,9 +358,14 @@ try {
     while ($true) {
         $null = Wait-Event -Timeout 3
         if (((Get-Date) - $lastHeartbeat).TotalMinutes -ge 10) {
-            Write-Log "heartbeat: $($pending.Count) up / $($renames.Count) ren / $($deletes.Count) del pending"
+            Write-Log "heartbeat: $($pending.Count) up / $($renames.Count) ren / $($deletes.Count) del pending$(if ($parked.Count) { ", $($parked.Count) upload(s) parked" })"
             $lastHeartbeat = Get-Date
             Update-LastSeen
+        }
+        # parked uploads whose delay has run out go back into the queue, and
+        # are flushed without waiting for an event
+        foreach ($r in @(Get-DueUploads $parked (Get-Date))) {
+            if ($pending.Add($r) -and $null -eq $oldestPending) { $oldestPending = (Get-Date).AddSeconds(-60) }
         }
         $drained = 0
         $evtTrace = [System.Collections.Generic.List[string]]::new()
@@ -388,9 +428,12 @@ try {
 
         # defer while the nightly bisync holds its lock
         if ($bisyncRunning) { continue }
+        # nothing but uploads queued, and those are paused after a failed batch
+        if (($renames.Count + $deletes.Count) -eq 0 -and (Get-Date) -lt $uploadHoldUntil) { continue }
         $oldestPending = $null
 
         # the flush cycle must never kill the watcher - log and carry on
+        $inFlight = @()
         try {
             # paths whose local rename/delete the cloud now reflects; their
             # intent entries are completed at the end of the flush
@@ -446,7 +489,10 @@ try {
                     }
                     Write-Log "WARN case-only 2-step moveto failed for $newR - falling back"
                 }
-                & $rcloneExe moveto "$remote$oldR" "$remote$newR" @pacer --log-level ERROR --log-file $logFile 2>$null
+                # --retries 1: an old path the cloud never had (every temp-file
+                # save) fails the same way three times over - 1308 such moves
+                # left 3924 error lines in one log. The upload below is the retry.
+                & $rcloneExe moveto "$remote$oldR" "$remote$newR" @pacer --retries 1 --log-level ERROR --log-file $logFile 2>$null
                 $moveExit = $LASTEXITCODE
                 if ($moveExit -eq 0) {
                     $renamedTotal++
@@ -474,17 +520,29 @@ try {
             #    file mid-write ends in "corrupted on transfer" and rclone's
             #    cleanup trashes the cloud copy, which started the 2026-08-29
             #    delete chain. 10s of write silence is required before upload.
-            $settleCut = (Get-Date).AddSeconds(-10)
+            $now = Get-Date
+            $settleCut = $now.AddSeconds(-10)
             $hot = 0
-            $batch = @(foreach ($r in @($pending)) {
-                    $fi = Get-Item -LiteralPath (Join-Path $root $r) -Force -ErrorAction SilentlyContinue
-                    if (-not $fi -or $fi.PSIsContainer) { [void]$pending.Remove($r); continue }
-                    if ($fi.LastWriteTime -gt $settleCut) { $hot++; continue }
-                    [void]$pending.Remove($r)
-                    $r
-                })
+            $batch = @()
+            # after a batch that failed as a whole, uploads wait out a growing
+            # pause; the queue keeps collecting meanwhile
+            if ($now -ge $uploadHoldUntil) {
+                $batch = @(foreach ($r in @($pending)) {
+                        $fi = Get-Item -LiteralPath (Join-Path $root $r) -Force -ErrorAction SilentlyContinue
+                        if (-not $fi -or $fi.PSIsContainer) { [void]$pending.Remove($r); [void]$parked.Remove($r); continue }
+                        # a file that failed on its own waits out its delay in
+                        # $parked - a new change event does not shorten it
+                        if ($parked.ContainsKey($r) -and $parked[$r].Next -gt $now) { [void]$pending.Remove($r); continue }
+                        if ($fi.LastWriteTime -gt $settleCut) { $hot++; continue }
+                        [void]$pending.Remove($r)
+                        $r
+                    })
+            }
             if ($hot -gt 0) { Write-Log "settle: $hot hot file(s) deferred to the next flush" }
             if ($batch.Count -gt 0) {
+                # out of the queue but not uploaded yet: the catch below puts
+                # the batch back if anything throws before it is accounted for
+                $inFlight = $batch
                 $batchFile = Join-Path $stateDir "watcher-batch.txt"
                 # rclone expects "/" separators for the gdrive: destination side too
                 Set-Content -Path $batchFile -Value @($batch | ForEach-Object { $_ -replace '\\', '/' }) -Encoding UTF8
@@ -495,20 +553,68 @@ try {
                 # events (partial copy + "Removing failed copy" trash) are our
                 # own doing and must not be applied locally.
                 Add-LedgerEntries $batch
+                # rclone logs this one run into its own file first: it is the
+                # only record of WHICH paths failed. --retries 1, because
+                # rclone would repeat the whole batch three times for a single
+                # failed file - the retrying is done here, per path.
+                Remove-Item -LiteralPath $flushLog -Force -Confirm:$false -ErrorAction SilentlyContinue
                 & $rcloneExe copy $root $remote --files-from-raw $batchFile --no-traverse @strictFlag `
-                    --modify-window 1s @pacer --transfers 4 --log-level INFO --log-file $logFile 2>$null
+                    --modify-window 1s @pacer --transfers 4 --retries 1 --log-level INFO --log-file $flushLog 2>$null
                 $exit = $LASTEXITCODE
+                $flushLines = @(Get-Content -LiteralPath $flushLog -ErrorAction SilentlyContinue)
+                if ($flushLines.Count -gt 0) { Add-Content $logFile $flushLines -ErrorAction SilentlyContinue }
                 Write-Log "flush: $($batch.Count) file(s), exit=$exit"
                 if ($exit -eq 0) {
                     $uploadedTotal += $batch.Count
+                    foreach ($r in $batch) { [void]$parked.Remove($r) }
+                    $uploadFailures = 0
+                    $uploadFailSince = $null
                 }
                 else {
-                    # strict mode fails the whole batch if one file vanished mid-flight:
-                    # re-queue; entries gone from disk drop out via the Test-Path filter
-                    foreach ($r in $batch) { [void]$pending.Add($r) }
-                    $lastEvent = Get-Date   # restart the quiet timer to pace retries
-                    Write-Log "re-queued $($batch.Count) file(s) after failed flush"
+                    $outcome = Get-FlushOutcome $flushLines
+                    $done = @($batch | Where-Object { $outcome.Copied.Contains($_) })
+                    $bad = @($batch | Where-Object { $outcome.Failed.ContainsKey($_) })
+                    $uploadedTotal += $done.Count
+                    foreach ($r in $done) { [void]$parked.Remove($r) }
+                    # Named paths alone do not tell a locked file from a dead
+                    # line: without DNS every path of the batch is "failed"
+                    # (4248 at once on 2026-10-30). One cheap call decides -
+                    # if the remote answers, the failures belong to the files.
+                    $reachable = $false
+                    if ($bad.Count -gt 0) {
+                        & $rcloneExe about $remote --json --retries 1 --low-level-retries 1 --contimeout 10s --timeout 20s 2>$null | Out-Null
+                        $reachable = $LASTEXITCODE -eq 0
+                    }
+                    if ($reachable) {
+                        foreach ($r in $bad) {
+                            $e = Add-UploadStrike $parked $r $outcome.Failed[$r] (Get-Date)
+                            Write-Log "WARN upload failed ($($e.Strikes)x, next try in $(Get-UploadRetryMinutes $e.Strikes) min): $($r.Replace('\', '/')) - $($e.Reason)"
+                        }
+                        # neither copied nor failed: unchanged, or never
+                        # reached - trying again costs one compare
+                        $again = @($batch | Where-Object { -not $outcome.Copied.Contains($_) -and -not $outcome.Failed.ContainsKey($_) })
+                        $uploadFailures = 0
+                        $uploadFailSince = $null
+                    }
+                    else {
+                        # the line is dead, or rclone gave up without naming a
+                        # path (strict mode: a file vanished mid-flight)
+                        $again = @($batch | Where-Object { -not $outcome.Copied.Contains($_) })
+                        $uploadFailures++
+                        if (-not $uploadFailSince) { $uploadFailSince = Get-Date }
+                        $hold = Get-UploadHoldSeconds $uploadFailures
+                        $uploadHoldUntil = (Get-Date).AddSeconds($hold)
+                        Write-Log "WARN flush failed as a whole ($($uploadFailures)x in a row) - uploads paused for $hold s"
+                    }
+                    # entries gone from disk drop out via the Get-Item filter
+                    foreach ($r in $again) { [void]$pending.Add($r) }
+                    if ($again.Count -gt 0) {
+                        $lastEvent = Get-Date   # restart the quiet timer to pace retries
+                        Write-Log "re-queued $($again.Count) file(s) after failed flush"
+                    }
                 }
+                $inFlight = @()
+                Update-UploadAlert
             }
 
             # 3) deletes: verify, fold, cap, then move to the Drive trash
@@ -589,6 +695,8 @@ try {
         }
         catch {
             Write-Log "ERROR flush cycle: $($_.Exception.Message)"
+            # a batch taken out of the queue and not accounted for is not lost
+            foreach ($r in $inFlight) { [void]$pending.Add($r) }
         }
     }
 }

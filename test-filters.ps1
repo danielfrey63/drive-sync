@@ -47,6 +47,13 @@ foreach ($line in Get-Content $filters) {
         Add-Sample $pat "x\$($Matches[1])near\sample.txt"
     }
     elseif ($pat -match '^\*(\.[A-Za-z0-9]+)$') { Add-Sample $pat "x\sample$($Matches[1])" }
+    elseif ($pat -match '^\*([^/*?\[\]{}]+)$') {
+        # literal suffix: the name itself, a name that only contains it, and
+        # another case (rclone matches case-sensitively)
+        Add-Sample $pat "x\sample$($Matches[1])"
+        Add-Sample $pat "x\sample$($Matches[1])-near"
+        Add-Sample $pat "upper\sample$($Matches[1].ToUpperInvariant())"
+    }
     elseif ($pat -match '^([^/*?\[]+)\*$') { Add-Sample $pat "x\$($Matches[1])sample" }
     elseif ($plain -notmatch '[\*\?\[\]/]') { Add-Sample $pat "x\$plain" }
     else { $skipped.Add($pat) }

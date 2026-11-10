@@ -80,6 +80,12 @@
 # The NFC twins went to the conflict archive on 2026-11-07.
 - /Develop/danielfrey63/server-landscape/14-wordpress/migration/data/**
 
+# Lock files of the transcribe workflow: held open by the running job, so
+# every upload attempt fails with a sharing violation - 298 attempts on one
+# of them on 2026-11-06 - and a lock means nothing on another machine anyway.
+- *.workflow.lock
+- *.workflow.lock.guard
+
 # DriveFS pointer files for Google-native docs (the docs themselves stay
 # cloud-only via --drive-skip-gdocs; pointers stay local for the gdrive skill)
 - *.gdoc
