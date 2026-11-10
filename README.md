@@ -34,7 +34,7 @@ Watcher down: running (PID 28568)  lastFlush=2026-08-06 15:57:35  down=163 recyc
 drive-sync is a set of cooperating PowerShell scripts around rclone. In order of importance, it strives to be:
 
 1. **Safe from data loss.** Nothing is ever hard-deleted: deletions go to the Drive trash (30 days) or the Windows recycle bin. Reactive deletes are capped per cycle, uploads never overwrite newer cloud versions (`--update`), and a delete storm beyond the cap is journalled and carried out before the next bisync, each entry re-checked against both sides.
-2. **Self-healing.** A watchdog restarts silently died watchers, a start-up catch-up uploads everything modified while no watcher was alive, and the nightly full `bisync` reconciles whatever the reactive layer missed — the worst case is always bounded.
+2. **Self-healing.** A watchdog restarts watchers that died or whose loop stands still and raises an alert when the nightly run stays away, a start-up catch-up uploads everything modified while no watcher was alive, and the nightly full `bisync` reconciles whatever the reactive layer missed – the worst case is always bounded.
 3. **Invisible.** Watchers run as windowless scheduled tasks (no console flashing), survive battery operation and reboots, and need zero interaction.
 4. **Honest about its dependencies.** A stock rclone release works out of the box; pending rclone features are detected at runtime and used only when available.
 
@@ -106,6 +106,7 @@ Defaults live in [`config.ps1`](config.ps1); machine-specific overrides go into 
 | `AlertDuplicateObjects` | alert once a run names more paths with two Drive objects than this | `0` |
 | `AlertWatcherRestarts` | watchdog alert once a watcher needed this many restarts within an hour | `3` |
 | `AlertUploadStuckMinutes` | alert once a file could not be uploaded for this long, or no upload at all got through | `60` |
+| `WatcherHungMinutes` | the watchdog restarts a watcher whose main loop gave no sign of life for this long while it waits for no transfer | `30` |
 | `BisyncDailyAt` | daily start time of the reconciliation bisync (`HH:mm`) | `04:00` |
 | `EmptyDirCleanupDays` | days between remote empty-dir cleanups (`rclone rmdirs` after a successful bisync); `0` disables | `30` |
 | `EmptyDirCleanupExcludes` | paths the cleanup skips (folders whose only content is an unexportable google-native file would look empty) | `/Google Earth/**` |
@@ -163,7 +164,8 @@ A machine that is away for days must not simply resume: with the lid closed, Win
 | `rmdirs-last.txt` | timestamp of the last remote empty-dir cleanup |
 | `watcher-lastseen.txt`, `watcher-catchup.log` | liveness stamp of the upload watcher ("everything up to here is uploaded or captured" — only advances while nothing is pending) and the log of the last start-up catch-up |
 | `alerts.json`, `alerts.log` | last firing time per alert key (re-armed by recovery); every alert raised |
-| `watchdog-restarts.json` | restart times per watcher within the last hour (crash-loop detection) |
+| `watcher.alive`, `cloud-watcher.alive` | sign of life of each watcher's main loop, touched once a minute; the watchdog reads the age |
+| `watchdog-restarts.json` | restart times per watcher within the last hour (crash-loop detection), and since when the nightly run has looked missing |
 | `watchdog.log`, `watchdog-pause` | watchdog log; the pause marker suppresses restarts during maintenance (auto-discarded after 6 h; a first line `pid:<n>` keeps it alive as long as that process runs) |
 | `bin\rclone.exe` | optional custom rclone build; the watchers prefer it, deleting it falls back to the PATH rclone |
 
@@ -243,8 +245,9 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 | `sync-drive.ps1` | bisync wrapper (lock, logs, `status.json`); `-Resync` re-baselines, `-DryRun` previews |
 | `watch-drive.ps1` | upload watcher local → cloud (new/update/rename/delete + start-up catch-up) |
 | `watch-cloud.ps1` | download watcher cloud → local (new/update/trash); `-Once` runs a single cycle |
-| `watchdog.ps1` | restarts silently died watchers every 15 min; alerts when one keeps dying right after start |
-| `notify.ps1` | toast alerts that stay in the Action Center (via `ai-toolbox\tools\notify\toast.ps1`), one per condition every `AlertRepeatHours`: bisync needs a resync, bisync failing longer than `AlertStaleSyncHours`, local root unwritable, resync guard failed, a watcher crash-looping (`AlertWatcherRestarts` restarts within an hour, with the cause), uploads failing for `AlertUploadStuckMinutes` |
+| `watchdog.ps1` | every 15 min: restarts watchers that died or whose main loop stands still (`WatcherHungMinutes`, never in the middle of a transfer), alerts when one keeps dying right after start, and alerts when the nightly bisync does not happen at all (task missing, disabled, not started for `AlertStaleSyncHours`, or dying before it writes a status) |
+| `liveness.ps1` | the checks behind that dead man's switch: the watchers' stamp, the verdict on a silent watcher, the verdict on the nightly task |
+| `notify.ps1` | toast alerts that stay in the Action Center (via `ai-toolbox\tools\notify\toast.ps1`), one per condition every `AlertRepeatHours`: bisync needs a resync, bisync failing longer than `AlertStaleSyncHours`, local root unwritable, resync guard failed, a watcher crash-looping (`AlertWatcherRestarts` restarts within an hour, with the cause), uploads failing for `AlertUploadStuckMinutes`, a watcher silent for hours behind a transfer, the nightly run staying away |
 | `drive-api.ps1` | direct Drive v3 API with the rclone remote's OAuth token: path resolution for the cloud watcher, flat trash listing for the resync guard (~75 s instead of ~90 min) |
 | `filter-rules.ps1` | shared exclude logic for the watchers, derived from `filters.txt` |
 | `delete-journal.ps1`, `journal-replay.ps1` | the journal of deletes a watcher dropped at `MaxDeletes`, and the step that carries them out before every bisync and before a resync: a locally deleted path goes to the Drive trash unless it is back on disk or its cloud copy changed after the delete; a cloud-deleted path goes to the recycle bin unless it is live in the cloud again or was written locally after the delete |
@@ -255,6 +258,7 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 | `test-conflict-chain.ps1` | tests for the two modules above (no cloud access) |
 | `test-journal-replay.ps1` | the journal and its replay against a real `rclone bisync` between two scratch folders: the resurrection without the replay, both sides, foreign changes, dry run, an unreachable remote (local only) |
 | `test-upload-retry.ps1` | the module above against real log lines and a real `rclone copy` with one file held open (local only) |
+| `test-liveness.ps1` | tests for `liveness.ps1` (local only) |
 | `test-pending-rename.ps1` | an upload pending when its file or folder is renamed follows the new name, and a copy a resync brought back under the old name is recycled; `-Live` runs it against the watcher and the cloud in `Temp\` |
 | `test-filters.ps1` | the watchers' exclude logic (`filter-rules.ps1`) must give rclone's answer for a sample of every rule in `filters.txt` – run it after each filter change (local only) |
 | `test-alerts.ps1` | tests for `notify.ps1`; `-Live` shows one real test toast |

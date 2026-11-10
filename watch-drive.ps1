@@ -51,6 +51,9 @@ if (-not $script:instance) {
     Add-Content $logFile "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') another watcher (PID $(Get-Content $lockFile -TotalCount 1 -ErrorAction SilentlyContinue)) is active - exiting" -ErrorAction SilentlyContinue
     exit 0
 }
+# sign of life for the watchdog, touched from the main loop (liveness.ps1)
+. (Join-Path $PSScriptRoot "liveness.ps1")
+$aliveFile = Join-Path $stateDir "watcher.alive"
 $lastSeenFile = Join-Path $stateDir "watcher-lastseen.txt"
 $maxDeletes = $DriveSyncConfig.MaxDeletes
 $journalDrops = [bool]$DriveSyncConfig.JournalDroppedDeletes
@@ -115,7 +118,7 @@ function Write-EventLog([string[]]$lines) {
 # --- derive exclude sets from filters.txt -----------------------------------
 . (Join-Path $PSScriptRoot "filter-rules.ps1")
 $rules = Get-ExcludeRules $filters
-Write-Log "started (PID $PID): $($rules.Dirs.Count) dir rules, $($rules.Exts.Count) ext rules, $($rules.Names.Count) name rules"
+Write-Log "started (PID $PID): $($rules.Dirs.Count) dir rules, $($rules.Exts.Count) ext rules, $($rules.Names.Count) name rules, $($rules.Suffixes.Count) suffix rules"
 
 # --- watcher + event queue --------------------------------------------------
 # Events are drained from the session event queue via Wait-Event/Get-Event:
@@ -357,6 +360,7 @@ $lastHeartbeat = Get-Date
 try {
     while ($true) {
         $null = Wait-Event -Timeout 3
+        Update-AliveStamp $aliveFile
         if (((Get-Date) - $lastHeartbeat).TotalMinutes -ge 10) {
             Write-Log "heartbeat: $($pending.Count) up / $($renames.Count) ren / $($deletes.Count) del pending$(if ($parked.Count) { ", $($parked.Count) upload(s) parked" })"
             $lastHeartbeat = Get-Date

@@ -56,6 +56,9 @@ $DriveSyncConfig = @{
     # (locked by another program), or once no upload at all got through for
     # this long (network, sign-in, quota)
     AlertUploadStuckMinutes = 60
+    # the watchdog restarts a watcher whose main loop has given no sign of
+    # life for this long while it waits for no transfer (liveness.ps1)
+    WatcherHungMinutes = 30
 
     # daily start time of the reconciliation bisync ("HH:mm"); a full run
     # lists both sides completely, so pick a quiet slot

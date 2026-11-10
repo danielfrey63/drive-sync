@@ -57,6 +57,9 @@ if (-not $script:instance) {
     Add-Content $logFile "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') another cloud watcher (PID $(Get-Content $lockFile -TotalCount 1 -ErrorAction SilentlyContinue)) is active - exiting" -ErrorAction SilentlyContinue
     exit 0
 }
+# sign of life for the watchdog, touched from the main loop (liveness.ps1)
+. (Join-Path $PSScriptRoot "liveness.ps1")
+$aliveFile = Join-Path $stateDir "cloud-watcher.alive"
 $tokenFile = Join-Path $stateDir "cloud-watcher-pagetoken.txt"
 $bisyncLock = Join-Path $stateDir "sync.lock"
 $maxDeletes = $DriveSyncConfig.MaxDeletes
@@ -144,6 +147,7 @@ $newDirs = @{}
 $lastHeartbeat = Get-Date
 try {
     while ($true) {
+        Update-AliveStamp $aliveFile
         if (((Get-Date) - $lastHeartbeat).TotalMinutes -ge 10) {
             Write-Log "heartbeat: $($pending.Count) down / $($trash.Count) trash pending"
             $lastHeartbeat = Get-Date
