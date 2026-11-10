@@ -9,6 +9,9 @@
 # - Flag set battle-tested during the 2026-08-04 baseline: dangling shortcuts
 #   skipped, gdocs stay cloud-only, 1s modtime window (Drive ms vs NTFS 100ns),
 #   tuned pacer for the own client id.
+# - Deletes the watchers only journalled (beyond MaxDeletes) are carried out
+#   before bisync looks (journal-replay.ps1); exit 20 = that failed and the
+#   bisync was not started.
 # - Every EmptyDirCleanupDays a successful run also prunes empty folder
 #   skeletons on the remote (rclone rmdirs) - bisync itself only tracks files
 #   and never sees directories without any.
@@ -47,8 +50,11 @@ $logDir = Join-Path $stateDir "logs"
 $lockFile = Join-Path $stateDir "sync.lock"
 $statusFile = Join-Path $stateDir "status.json"
 New-Item -ItemType Directory -Force $logDir | Out-Null
-. (Join-Path $PSScriptRoot "bisync-index.ps1")
+. (Join-Path $PSScriptRoot "journal-replay.ps1")
 . (Join-Path $PSScriptRoot "notify.ps1")
+# own exit code, outside rclone's 0..10: the delete journal could not be
+# replayed and the bisync was not started (see below)
+$ExitReplayFailed = 20
 
 # --- local root guard -------------------------------------------------------
 # Never let bisync loose on a root that is not writable: on 2026-09-21 a run
@@ -110,20 +116,32 @@ if (Test-Path $lockFile) {
 Set-Content -Path $lockFile -Value $PID
 
 try {
-    # --- deletes the watchers dropped at the cap ----------------------------
-    # Report only, for now: how many of them would bisync misread as "new on
-    # the other side" if nothing told it otherwise? Reads the journals and the
-    # baselines and changes neither, so this is safe to leave running while the
-    # numbers are still being judged. A -Resync rebuilds the baseline from
-    # scratch and makes the whole question moot.
-    if (-not $Resync -and $DriveSyncConfig.JournalDroppedDeletes) {
-        # -Peek under -DryRun: a trial run must not consume the entries the next
-        # real run needs - it would silently undo the very thing being tested
-        Write-SpliceReport $localPath $remote $stateDir -Peek:$DryRun | Out-Null
-    }
-
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $logFile = Join-Path $logDir "bisync-$stamp.log"
+
+    # --- deletes the watchers dropped at the cap ----------------------------
+    # Carried out here, before bisync looks: a file born and deleted between
+    # two baselines is in no listing, so bisync would read its deletion as
+    # "new on the other side" and copy it back (journal-replay.ps1). If the
+    # replay cannot finish, the bisync must not run either - it would bring
+    # exactly those files back, and the journal entries would then count as
+    # "back on disk" and lapse. A -Resync does the same through its guard.
+    # Under -DryRun the replay only reports and leaves the journal alone.
+    $replayFailed = $false
+    if (-not $Resync -and $DriveSyncConfig.JournalDroppedDeletes) {
+        $replayLog = {
+            param($m)
+            $line = "$(Get-Date -Format 'yyyy/MM/dd HH:mm:ss') JOURNAL: $m"
+            Write-Host $line
+            Add-Content $logFile $line -ErrorAction SilentlyContinue
+        }
+        $rules = Get-ExcludeRules $filters
+        foreach ($side in "path1", "path2") {
+            $replay = Invoke-JournalledDeletes -Side $side -LocalRoot $localPath -Remote $remote `
+                -StateDir $stateDir -Rules $rules -DryRun:$DryRun -Log $replayLog
+            if (-not $replay.Ok) { $replayFailed = $true; break }
+        }
+    }
 
     # --- revive guard ---------------------------------------------------------
     # --resync merges and never deletes: a stale local copy would re-upload
@@ -179,8 +197,11 @@ try {
     if ($DryRun) { $rcArgs += "--dry-run" }
 
     $start = Get-Date
-    & rclone @rcArgs
-    $exit = $LASTEXITCODE
+    if ($replayFailed) { $exit = $ExitReplayFailed }
+    else {
+        & rclone @rcArgs
+        $exit = $LASTEXITCODE
+    }
     $end = Get-Date
 
     $status = if (Test-Path $statusFile) { Get-Content $statusFile -Raw | ConvertFrom-Json } else { [pscustomobject]@{} }
@@ -190,14 +211,7 @@ try {
         exitCode = $exit; resync = [bool]$Resync; dryRun = [bool]$DryRun; log = $logFile
     }
     $newStatus = [ordered]@{ lastRun = $run }
-    if ($exit -eq 0 -and -not $DryRun) {
-        $newStatus.lastSuccess = $run
-        # only now is the batch of dropped deletes the splice report claimed
-        # settled: the bisync has carried them out (or a resync re-baselined
-        # after the guard did). A failed run keeps it for the next run or the
-        # guard - see Write-SpliceReport in bisync-index.ps1.
-        foreach ($side in "path1", "path2") { Clear-DroppedDeletes $stateDir $side }
-    }
+    if ($exit -eq 0 -and -not $DryRun) { $newStatus.lastSuccess = $run }
     elseif ($status.lastSuccess) { $newStatus.lastSuccess = $status.lastSuccess }
     # retry: a concurrent reader (status check while the run ends) makes
     # Set-Content throw and the whole run would end without a status record
@@ -277,8 +291,9 @@ try {
                 $staleH = if ($DriveSyncConfig.AlertStaleSyncHours) { [double]$DriveSyncConfig.AlertStaleSyncHours } else { 36 }
                 $lastOk = if ($newStatus.lastSuccess) { [datetime]$newStatus.lastSuccess.end } else { [datetime]::MinValue }
                 if (((Get-Date) - $lastOk).TotalHours -ge $staleH) {
+                    $what = if ($exit -eq $ExitReplayFailed) { "Das Lösch-Journal liess sich nicht ausführen, der Abgleich wurde nicht gestartet" } else { "Exit $exit" }
                     Send-DriveSyncAlert -Key "bisync-failed" -Title "Drive-Sync: Nachtlauf scheitert" `
-                        -Body "Exit $exit, letzter erfolgreicher Abgleich: $since. Log: $logFile" | Out-Null
+                        -Body "$what, letzter erfolgreicher Abgleich: $since. Log: $logFile" | Out-Null
                 }
             }
         }
@@ -300,7 +315,8 @@ try {
         elseif ($exit -eq 0) { Clear-DriveSyncAlert "drive-duplicates" }
     }
 
-    if ($exit -ne 0) { Write-Warning "bisync failed with exit code $exit - see $logFile" }
+    if ($exit -eq $ExitReplayFailed) { Write-Warning "delete journal replay failed, bisync not started - see $logFile" }
+    elseif ($exit -ne 0) { Write-Warning "bisync failed with exit code $exit - see $logFile" }
     else { Write-Host "bisync ok ($($run.minutes) min) - log: $logFile" }
     exit $exit
 }

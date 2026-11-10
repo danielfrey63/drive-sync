@@ -25,19 +25,13 @@ $DriveSyncConfig = @{
     # the nightly bisync (safety against sync-amplified mass deletions)
     MaxDeletes    = 50
 
-    # record the paths a MaxDeletes storm dropped, so the nightly bisync can be
-    # told about them. Without this the cap does not defer a delete, it can
-    # invert it: a file created after the last baseline and deleted before the
-    # next one is invisible to bisync as a deletion and comes back as "new on
-    # the other side" (2026-09-05, eight files). Off = the old behaviour.
+    # record the paths a MaxDeletes storm dropped and carry them out before the
+    # next bisync (journal-replay.ps1). Without this the cap does not defer a
+    # delete, it can invert it: a file created after the last baseline and
+    # deleted before the next one is invisible to bisync as a deletion and
+    # comes back as "new on the other side" (2026-09-05, eight files).
+    # Off = the old behaviour.
     JournalDroppedDeletes = $true
-
-    # upper bound on how many journalled paths one run looks up and splices.
-    # Two jobs: each lookup costs one metadata call, and a splice gone wrong
-    # must stay small. The dangerous case is narrow anyway - only files born
-    # and deleted between two baselines qualify (8 on 2026-09-05, out of 4036
-    # deletes that bisync handled correctly on its own).
-    MaxSpliceEntries = 200
 
     # Drive Changes API poll interval of the cloud watcher (seconds)
     PollSeconds   = 60

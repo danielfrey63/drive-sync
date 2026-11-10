@@ -14,8 +14,9 @@
 #   path1 - the local mirror; the watcher deleted here, the cloud still has it
 #   path2 - the cloud;        the cloud deleted here, the local mirror still has it
 #
-# Paths are stored with "/" separators - the form the bisync listings use, which
-# is the only consumer. Dot-source this file, then:
+# Paths are stored with "/" separators - the form rclone uses. The consumer is
+# journal-replay.ps1, which carries the deletes out before every bisync.
+# Dot-source this file, then:
 #   . (Join-Path $PSScriptRoot "delete-journal.ps1")
 #   Add-DroppedDeletes $stateDir "path1" $paths
 #   $entries = Read-DroppedDeletes $stateDir "path1" -Claim   # .Rel / .Time
@@ -44,7 +45,7 @@ function Get-DeleteClaimPath([string]$stateDir, [string]$side) {
 
 function Add-DroppedDeletes([string]$stateDir, [string]$side, [string[]]$rels) {
     # never let journalling kill a watcher: a missing journal costs us the
-    # splice for one night, an exception costs us the watcher
+    # replay for one night, an exception costs us the watcher
     try {
         if (-not $rels -or $rels.Count -eq 0) { return }
         $file = Get-DeleteJournalPath $stateDir $side
@@ -65,9 +66,8 @@ function Add-DroppedDeletes([string]$stateDir, [string]$side, [string[]]$rels) {
 # Without -Claim nothing is moved and both files are read - a peek at everything
 # still pending, including a batch a dead consumer left behind.
 # -MaxAgeDays overrides the read cut-off for a caller that re-checks every
-# entry against the file systems anyway (resync-guard.ps1): after a critical
-# abort the splice report finds no baseline and leaves the journal alone, so a
-# blocked chain can easily outlive the 7 days.
+# entry against the file systems anyway (journal-replay.ps1): a chain that is
+# blocked for a while can easily outlive the 7 days.
 function Read-DroppedDeletes([string]$stateDir, [string]$side, [switch]$Claim, [int]$MaxAgeDays = 0) {
     try {
         $file = Get-DeleteJournalPath $stateDir $side
@@ -121,4 +121,23 @@ function Clear-DroppedDeletes([string]$stateDir, [string]$side, [switch]$All) {
         }
     }
     catch { Write-Host "delete journal clear failed ($side): $($_.Exception.Message)" }
+}
+
+# Of a set of paths, those not covered by another member: a deleted folder
+# covers everything below it. One hash lookup per path segment - the pairwise
+# comparison the upload watcher used until 2026-11-10 went quadratic on a
+# storm of a few thousand deletes.
+function Select-TopmostPaths([string[]]$rels, [char]$sep = '/') {
+    $set = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($r in $rels) { if ($r) { [void]$set.Add($r) } }
+    foreach ($r in $set) {
+        $covered = $false
+        $i = $r.LastIndexOf($sep)
+        while ($i -gt 0) {
+            $p = $r.Substring(0, $i)
+            if ($set.Contains($p)) { $covered = $true; break }
+            $i = $p.LastIndexOf($sep)
+        }
+        if (-not $covered) { $r }
+    }
 }
