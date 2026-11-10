@@ -33,29 +33,29 @@ try {
     (Get-Item $abs).LastWriteTimeUtc = $t1520
     $size = (Get-Item $abs).Length
 
-    Check "leeres Ledger: nichts ist ein Echo" (-not (Test-UploadEcho (Get-UploadLedger $stateDir) $rel (Unix $t1520) $size))
+    Check "empty ledger: nothing is an echo" (-not (Test-UploadEcho (Get-UploadLedger $stateDir) $rel (Unix $t1520) $size))
 
     Add-UploadLedger $stateDir $root @($rel)
     $ledger = Get-UploadLedger $stateDir
     $line = Get-Content (Get-UploadLedgerPath $stateDir) | Select-Object -Last 1
-    Check "Eintrag traegt Modtime und Groesse" ($line -match "^\d+`t$([regex]::Escape($rel))`t$(Unix $t1520)`t$size$") $line
+    Check "an entry carries modtime and size" ($line -match "^\d+`t$([regex]::Escape($rel))`t$(Unix $t1520)`t$size$") $line
 
-    Check "eigener Upload (gleiche Modtime, gleiche Groesse) ist ein Echo" (Test-UploadEcho $ledger $rel (Unix $t1520) $size)
-    Check "Modtime 1 s daneben ist noch ein Echo (modify-window)" (Test-UploadEcho $ledger $rel ((Unix $t1520) + 1) $size)
+    Check "own upload (same modtime, same size) is an echo" (Test-UploadEcho $ledger $rel (Unix $t1520) $size)
+    Check "a modtime 1 s off is still an echo (modify window)" (Test-UploadEcho $ledger $rel ((Unix $t1520) + 1) $size)
     $t1602 = [datetime]::new(2026, 10, 3, 14, 2, 21, [DateTimeKind]::Utc)
-    Check "fremde Aenderung 42 min spaeter ist KEIN Echo" (-not (Test-UploadEcho $ledger $rel (Unix $t1602) ($size + 412)))
-    Check "gleiche Modtime, andere Groesse ist KEIN Echo" (-not (Test-UploadEcho $ledger $rel (Unix $t1520) ($size + 1)))
-    Check "Pfadvergleich ignoriert Gross-/Kleinschreibung" (Test-UploadEcho $ledger $rel.ToUpperInvariant() (Unix $t1520) $size)
-    Check "unbekannter Pfad ist kein Echo" (-not (Test-UploadEcho $ledger "setup\other.ps1" (Unix $t1520) $size))
-    Check "Event ohne Metadaten faellt auf Pfadvergleich zurueck" (Test-UploadEcho $ledger $rel $null $null)
+    Check "a foreign change 42 min later is NOT an echo" (-not (Test-UploadEcho $ledger $rel (Unix $t1602) ($size + 412)))
+    Check "same modtime, other size is NOT an echo" (-not (Test-UploadEcho $ledger $rel (Unix $t1520) ($size + 1)))
+    Check "the path comparison ignores case" (Test-UploadEcho $ledger $rel.ToUpperInvariant() (Unix $t1520) $size)
+    Check "an unknown path is no echo" (-not (Test-UploadEcho $ledger "setup\other.ps1" (Unix $t1520) $size))
+    Check "an event without metadata falls back to the path comparison" (Test-UploadEcho $ledger $rel $null $null)
 
     # two uploads of the same path inside the window: both stands are echoes
     Set-Content $abs ("b" * 150) -NoNewline
     (Get-Item $abs).LastWriteTimeUtc = $t1602
     Add-UploadLedger $stateDir $root @($rel)
     $ledger = Get-UploadLedger $stateDir
-    Check "zwei Uploads: erster Stand bleibt Echo" (Test-UploadEcho $ledger $rel (Unix $t1520) $size)
-    Check "zwei Uploads: zweiter Stand ist Echo" (Test-UploadEcho $ledger $rel (Unix $t1602) 150)
+    Check "two uploads: the first state stays an echo" (Test-UploadEcho $ledger $rel (Unix $t1520) $size)
+    Check "two uploads: the second state is an echo" (Test-UploadEcho $ledger $rel (Unix $t1602) 150)
 
     # path without a local file (renamed away before the ledger write) and
     # lines written by the previous watcher version: path-only, as before
@@ -63,35 +63,35 @@ try {
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     Add-Content (Get-UploadLedgerPath $stateDir) "$now`tsetup\legacy.txt"
     $ledger = Get-UploadLedger $stateDir
-    Check "Eintrag ohne lokale Datei: jeder Stand ist Echo" (Test-UploadEcho $ledger "setup\gone.txt" 1 1)
-    Check "Altformat-Zeile: jeder Stand ist Echo" (Test-UploadEcho $ledger "setup\legacy.txt" 1 1)
+    Check "entry without a local file: every state is an echo" (Test-UploadEcho $ledger "setup\gone.txt" 1 1)
+    Check "old-format line: every state is an echo" (Test-UploadEcho $ledger "setup\legacy.txt" 1 1)
 
     # expiry
     $old = $now - 3700
     Set-Content (Get-UploadLedgerPath $stateDir) @("$old`tsetup\expired.txt`t1`t1", "$now`tsetup\fresh.txt`t1`t1")
     $ledger = Get-UploadLedger $stateDir
-    Check "abgelaufener Eintrag wird nicht gelesen" (-not $ledger.ContainsKey("setup\expired.txt") -and $ledger.ContainsKey("setup\fresh.txt"))
+    Check "an expired entry is not read" (-not $ledger.ContainsKey("setup\expired.txt") -and $ledger.ContainsKey("setup\fresh.txt"))
     Add-UploadLedger $stateDir $root @($rel)
-    Check "abgelaufener Eintrag wird beim Schreiben entfernt" (-not ((Get-Content (Get-UploadLedgerPath $stateDir)) -match 'expired'))
-    Check "kein .tmp-Rest nach dem Schreiben" (-not (Test-Path "$(Get-UploadLedgerPath $stateDir).tmp"))
+    Check "an expired entry is dropped on write" (-not ((Get-Content (Get-UploadLedgerPath $stateDir)) -match 'expired'))
+    Check "no .tmp left after the write" (-not (Test-Path "$(Get-UploadLedgerPath $stateDir).tmp"))
 
     # modifiedTime conversion (PS7 hands over [datetime], 5.1 the raw string)
-    Check "Zeit aus RFC-3339-String" ((ConvertTo-UploadLedgerTime "2026-10-03T14:02:21.978Z") -eq (Unix $t1602))
-    Check "Zeit aus UTC-DateTime" ((ConvertTo-UploadLedgerTime $t1602) -eq (Unix $t1602))
-    Check "Zeit aus lokalem DateTime" ((ConvertTo-UploadLedgerTime $t1602.ToLocalTime()) -eq (Unix $t1602))
-    Check "Zeit aus DateTime ohne Kind gilt als UTC" ((ConvertTo-UploadLedgerTime ([datetime]::SpecifyKind($t1602, [DateTimeKind]::Unspecified))) -eq (Unix $t1602))
-    Check "leere/kaputte Zeit ergibt null" (($null -eq (ConvertTo-UploadLedgerTime $null)) -and ($null -eq (ConvertTo-UploadLedgerTime "kaputt")))
+    Check "time from an RFC 3339 string" ((ConvertTo-UploadLedgerTime "2026-10-03T14:02:21.978Z") -eq (Unix $t1602))
+    Check "time from a UTC DateTime" ((ConvertTo-UploadLedgerTime $t1602) -eq (Unix $t1602))
+    Check "time from a local DateTime" ((ConvertTo-UploadLedgerTime $t1602.ToLocalTime()) -eq (Unix $t1602))
+    Check "time from a DateTime without kind counts as UTC" ((ConvertTo-UploadLedgerTime ([datetime]::SpecifyKind($t1602, [DateTimeKind]::Unspecified))) -eq (Unix $t1602))
+    Check "an empty or broken time yields null" (($null -eq (ConvertTo-UploadLedgerTime $null)) -and ($null -eq (ConvertTo-UploadLedgerTime "kaputt")))
 
     # --- conflict-loser rename filter ----------------------------------------
-    Check "X -> X.conflict1 ist ein bisync-Verlierer" (Test-ConflictLoserRename "setup\install.ps1" "setup\install.ps1.conflict1")
-    Check "X.conflict1 -> X.conflict1.conflict1 ebenso" (Test-ConflictLoserRename "a\b.md.conflict1" "a\b.md.conflict1.conflict1")
-    Check "mehrstellige Nummer" (Test-ConflictLoserRename "a\b.md" "a\b.md.conflict12")
-    Check "Gross-/Kleinschreibung im Pfad egal" (Test-ConflictLoserRename "A\B.md" "a\b.md.conflict1")
-    Check "normale Umbenennung bleibt eine Umbenennung" (-not (Test-ConflictLoserRename "a\b.md" "a\c.md"))
-    Check "Editor-Temp-Save bleibt eine Umbenennung" (-not (Test-ConflictLoserRename "a\b.md.tmp.123" "a\b.md"))
-    Check "Rueckbenennung X.conflict1 -> X ist kein Verlierer" (-not (Test-ConflictLoserRename "a\b.md.conflict1" "a\b.md"))
-    Check "anderer Zusatz als .conflictN zaehlt nicht" (-not (Test-ConflictLoserRename "a\b.md" "a\b.md.conflict1.bak"))
-    Check "Verschieben in anderen Ordner zaehlt nicht" (-not (Test-ConflictLoserRename "a\b.md" "c\b.md.conflict1"))
+    Check "X -> X.conflict1 is a bisync loser" (Test-ConflictLoserRename "setup\install.ps1" "setup\install.ps1.conflict1")
+    Check "X.conflict1 -> X.conflict1.conflict1 as well" (Test-ConflictLoserRename "a\b.md.conflict1" "a\b.md.conflict1.conflict1")
+    Check "multi-digit number" (Test-ConflictLoserRename "a\b.md" "a\b.md.conflict12")
+    Check "case in the path does not matter" (Test-ConflictLoserRename "A\B.md" "a\b.md.conflict1")
+    Check "an ordinary rename stays a rename" (-not (Test-ConflictLoserRename "a\b.md" "a\c.md"))
+    Check "an editor's temp save stays a rename" (-not (Test-ConflictLoserRename "a\b.md.tmp.123" "a\b.md"))
+    Check "renaming back X.conflict1 -> X is no loser" (-not (Test-ConflictLoserRename "a\b.md.conflict1" "a\b.md"))
+    Check "a suffix other than .conflictN does not count" (-not (Test-ConflictLoserRename "a\b.md" "a\b.md.conflict1.bak"))
+    Check "a move into another folder does not count" (-not (Test-ConflictLoserRename "a\b.md" "c\b.md.conflict1"))
 
     # --- sweep log parser ----------------------------------------------------
     $r = "D:\Meine Ablage"
@@ -99,16 +99,16 @@ try {
     $p2 = '2026/09/02 04:22:02 NOTICE: - Path2             Renaming Path2 copy                         - gdrive{sl-MZ}:/Develop/danielfrey63/pmo/tools/agent.py.conflict1'
     $win = '2026/10/05 04:19:41 NOTICE: - Path2             Not renaming Path2 copy, as it was determined the winner - gdrive{sl-MZ}:/Develop/danielfrey63/laptop-setup/setup/install.ps1.conflict1.conflict1'
     $queue = '2026/10/04 04:15:55 NOTICE: - Path1             Queue copy to Path2                         - gdrive{sl-MZ}:/Develop/danielfrey63/laptop-setup/setup/install.ps1.conflict1'
-    Check "Path1-Zeile mit Laufwerksbuchstabe (der Fehler vom 04.10.)" ((Get-ConflictLoserRel $p1 $r) -eq 'Develop\danielfrey63\laptop-setup\setup\install.ps1.conflict1') (Get-ConflictLoserRel $p1 $r)
-    Check "Path1-Zeile, Root mit abschliessendem Backslash" ((Get-ConflictLoserRel $p1 "$r\") -eq 'Develop\danielfrey63\laptop-setup\setup\install.ps1.conflict1')
-    Check "Path2-Zeile mit Remote-Praefix" ((Get-ConflictLoserRel $p2 $r) -eq 'Develop\danielfrey63\pmo\tools\agent.py.conflict1') (Get-ConflictLoserRel $p2 $r)
-    Check "Gewinner-Zeile (Not renaming) ist kein Verlierer" ($null -eq (Get-ConflictLoserRel $win $r))
-    Check "Queue-Zeile ist kein Verlierer" ($null -eq (Get-ConflictLoserRel $queue $r))
-    Check "lokaler Pfad ausserhalb des Roots wird verworfen" ($null -eq (Get-ConflictLoserRel ($p1 -replace 'Meine Ablage', 'Andere Ablage') $r))
+    Check "Path1 line with a drive letter (the bug of 2026-10-04)" ((Get-ConflictLoserRel $p1 $r) -eq 'Develop\danielfrey63\laptop-setup\setup\install.ps1.conflict1') (Get-ConflictLoserRel $p1 $r)
+    Check "Path1 line, root with a trailing backslash" ((Get-ConflictLoserRel $p1 "$r\") -eq 'Develop\danielfrey63\laptop-setup\setup\install.ps1.conflict1')
+    Check "Path2 line with the remote prefix" ((Get-ConflictLoserRel $p2 $r) -eq 'Develop\danielfrey63\pmo\tools\agent.py.conflict1') (Get-ConflictLoserRel $p2 $r)
+    Check "the winner's line (Not renaming) is no loser" ($null -eq (Get-ConflictLoserRel $win $r))
+    Check "a queue line is no loser" ($null -eq (Get-ConflictLoserRel $queue $r))
+    Check "a local path outside the root is dropped" ($null -eq (Get-ConflictLoserRel ($p1 -replace 'Meine Ablage', 'Andere Ablage') $r))
 
     # --- conflict name ---------------------------------------------------------
-    Check "Name mit .conflict1 erkannt" (Test-ConflictName "a\b.md.conflict1")
-    Check "Name mit .conflict1.bak nicht erkannt" (-not (Test-ConflictName "a\b.md.conflict1.bak"))
+    Check "name with .conflict1 recognised" (Test-ConflictName "a\b.md.conflict1")
+    Check "name with .conflict1.bak not recognised" (-not (Test-ConflictName "a\b.md.conflict1.bak"))
 
     # --- sweep -Scan: what counts as redundant (sweep-conflicts.ps1) -----------
     # lifted from the script via the AST: it runs a sweep when executed
@@ -125,12 +125,12 @@ try {
         [IO.File]::WriteAllText((Join-Path $sw "$name.conflict1"), $copy)
         Get-RedundancyMarker (Join-Path $sw "$name.conflict1") "sweep\$name.conflict1"
     }
-    Check "identische Kopie ist redundant" ((Pair "same.md" "abc" "abc") -eq "SAME-AS-ORIGINAL")
-    Check "Anfangsstueck eines angehaengten Logs ist redundant" ((Pair "log.jsonl" "l1`nl2`nl3`n" "l1`nl2`n") -eq "PREFIX-OF-ORIG")
-    Check "laengere Kopie ist nicht redundant" ($null -eq (Pair "longer.md" "l1`n" "l1`nl2`n"))
-    Check "abweichende Kopie ist nicht redundant" ($null -eq (Pair "diff.md" "alt" "neu"))
+    Check "an identical copy is redundant" ((Pair "same.md" "abc" "abc") -eq "SAME-AS-ORIGINAL")
+    Check "the head of a log that was appended to is redundant" ((Pair "log.jsonl" "l1`nl2`nl3`n" "l1`nl2`n") -eq "PREFIX-OF-ORIG")
+    Check "a longer copy is not redundant" ($null -eq (Pair "longer.md" "l1`n" "l1`nl2`n"))
+    Check "a differing copy is not redundant" ($null -eq (Pair "diff.md" "alt" "neu"))
     [IO.File]::WriteAllText((Join-Path $sw "orphan.md.conflict1"), "x")
-    Check "Kopie ohne Original ist nicht redundant" ($null -eq (Get-RedundancyMarker (Join-Path $sw "orphan.md.conflict1") "sweep\orphan.md.conflict1"))
+    Check "a copy without an original is not redundant" ($null -eq (Get-RedundancyMarker (Join-Path $sw "orphan.md.conflict1") "sweep\orphan.md.conflict1"))
 }
 finally {
     [IO.Directory]::Delete($scratch, $true)

@@ -35,30 +35,30 @@ function Get-WatcherFunction([string]$name) {
     $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true) | Select-Object -First 1
 }
 $fn = Get-WatcherFunction "Move-PendingPaths"
-Check "Move-PendingPaths in watch-drive.ps1 gefunden" ($null -ne $fn)
+Check "Move-PendingPaths found in watch-drive.ps1" ($null -ne $fn)
 if ($fn) {
     . ([scriptblock]::Create($fn.Extent.Text))
     $pending = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($p in "Z\0851 - Mail.md", "Dir\a.txt", "Dir\sub\b.txt", "Dirx\c.txt", "other.md") { [void]$pending.Add($p) }
 
     Move-PendingPaths "Z\0851 - Mail.md" "Z\1013 - Mail.md"
-    Check "Datei: Upload folgt dem neuen Namen" ($pending.Contains("Z\1013 - Mail.md") -and -not $pending.Contains("Z\0851 - Mail.md"))
+    Check "file: the upload follows the new name" ($pending.Contains("Z\1013 - Mail.md") -and -not $pending.Contains("Z\0851 - Mail.md"))
 
     Move-PendingPaths "dir" "Neu"
-    Check "Ordner: Inhalt folgt per Praefix, auch rekursiv" ($pending.Contains("Neu\a.txt") -and $pending.Contains("Neu\sub\b.txt"))
-    Check "Ordner: Gross-/Kleinschreibung egal" (-not $pending.Contains("Dir\a.txt"))
-    Check "Ordner: Namensvetter mit gleichem Praefix bleibt (Dirx)" ($pending.Contains("Dirx\c.txt"))
-    Check "Unbeteiligte Datei bleibt" ($pending.Contains("other.md"))
+    Check "folder: its content follows by prefix, recursively too" ($pending.Contains("Neu\a.txt") -and $pending.Contains("Neu\sub\b.txt"))
+    Check "folder: case does not matter" (-not $pending.Contains("Dir\a.txt"))
+    Check "folder: a namesake with the same prefix stays (Dirx)" ($pending.Contains("Dirx\c.txt"))
+    Check "an unrelated file stays" ($pending.Contains("other.md"))
 
     Move-PendingPaths "nicht\da.md" "egal.md"
-    Check "Rename ohne pending Eintrag aendert nichts" ($pending.Count -eq 5) "$($pending.Count) Eintraege"
+    Check "a rename without a pending entry changes nothing" ($pending.Count -eq 5) "$($pending.Count) Eintraege"
 }
 
 # --- offline: a change event drained after its file was already renamed -----
 # The 2026-11-02 case. Live timing cannot force it, so replay the drain order:
 # Changed(old) when old is already gone, then Renamed(old -> new).
 $fn = Get-WatcherFunction "Add-ChangedPath"
-Check "Add-ChangedPath in watch-drive.ps1 gefunden" ($null -ne $fn)
+Check "Add-ChangedPath found in watch-drive.ps1" ($null -ne $fn)
 if ($fn) {
     . ([scriptblock]::Create($fn.Extent.Text))
     $scratch = Join-Path ([IO.Path]::GetTempPath()) ("changed-test-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
@@ -67,22 +67,22 @@ if ($fn) {
     try {
         $pending = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         Add-ChangedPath (Join-Path $scratch "da.md") "da.md"
-        Check "Change: vorhandene Datei wird vorgemerkt" ($pending.Contains("da.md"))
+        Check "change: an existing file is queued" ($pending.Contains("da.md"))
         Add-ChangedPath (Join-Path $scratch "dir") "dir"
-        Check "Change: Ordner wird nicht vorgemerkt" (-not $pending.Contains("dir"))
+        Check "change: a folder is not queued" (-not $pending.Contains("dir"))
         Add-ChangedPath (Join-Path $scratch "2030-v0.2.md") "2030-v0.2.md"
-        Check "Change: schon weggezogene Datei wird trotzdem vorgemerkt" ($pending.Contains("2030-v0.2.md"))
+        Check "change: a file already moved away is queued all the same" ($pending.Contains("2030-v0.2.md"))
         $fnMove = Get-WatcherFunction "Move-PendingPaths"
         . ([scriptblock]::Create($fnMove.Extent.Text))
         Move-PendingPaths "2030-v0.2.md" "2027-v0.2.md"
-        Check "Change + Rename in einer Runde: Upload unter neuem Namen" ($pending.Contains("2027-v0.2.md") -and -not $pending.Contains("2030-v0.2.md"))
+        Check "change + rename in one round: upload under the new name" ($pending.Contains("2027-v0.2.md") -and -not $pending.Contains("2030-v0.2.md"))
     }
     finally { Remove-Item -LiteralPath $scratch -Recurse -Force }
 }
 
 # --- offline: copies revived under the old name -----------------------------
 $fn = Get-WatcherFunction "Remove-RevivedRenameSource"
-Check "Remove-RevivedRenameSource in watch-drive.ps1 gefunden" ($null -ne $fn)
+Check "Remove-RevivedRenameSource found in watch-drive.ps1" ($null -ne $fn)
 if ($fn) {
     . (Join-Path $PSScriptRoot "recycle-bin.ps1")
     . ([scriptblock]::Create($fn.Extent.Text))
@@ -103,38 +103,38 @@ if ($fn) {
         $pending = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         [void]$pending.Add("protokolle\x.m4a")
         Remove-RevivedRenameSource "protokolle\x.m4a" "protokolle\2026-10-20\x.m4a"
-        Check "Datei: identische Kopie unter altem Namen recycelt" (-not (Test-Path (Join-Path $root "protokolle\x.m4a")))
-        Check "Datei: neuer Name bleibt" (Test-Path (Join-Path $root "protokolle\2026-10-20\x.m4a"))
-        Check "Datei: Upload des alten Namens verworfen" ($pending.Count -eq 0)
+        Check "file: identical copy under the old name recycled" (-not (Test-Path (Join-Path $root "protokolle\x.m4a")))
+        Check "file: the new name stays" (Test-Path (Join-Path $root "protokolle\2026-10-20\x.m4a"))
+        Check "file: upload of the old name dropped" ($pending.Count -eq 0)
 
         # file: something different under the old name is somebody's work
         Put "a.md" "jemand anderes" $t0.AddMinutes(5)
         Put "b.md" "original" $t0
         Remove-RevivedRenameSource "a.md" "b.md"
-        Check "Datei: abweichende Datei unter altem Namen bleibt" (Test-Path (Join-Path $root "a.md"))
+        Check "file: a differing file under the old name stays" (Test-Path (Join-Path $root "a.md"))
 
         # folder: two identical copies recycled, one differing file kept
         Put "Alt\a.txt" "1" $t0; Put "Neu\a.txt" "1" $t0
         Put "Alt\sub\b.txt" "2" $t0; Put "Neu\sub\b.txt" "2" $t0
         Put "Alt\c.txt" "anders" $t0; Put "Neu\c.txt" "3" $t0
         Remove-RevivedRenameSource "Alt" "Neu"
-        Check "Ordner: identische Dateien recycelt" (-not (Test-Path (Join-Path $root "Alt\a.txt")) -and -not (Test-Path (Join-Path $root "Alt\sub\b.txt")))
-        Check "Ordner: leerer Unterordner entfernt" (-not (Test-Path (Join-Path $root "Alt\sub")))
-        Check "Ordner: abweichende Datei und ihr Ordner bleiben" (Test-Path (Join-Path $root "Alt\c.txt"))
+        Check "folder: identical files recycled" (-not (Test-Path (Join-Path $root "Alt\a.txt")) -and -not (Test-Path (Join-Path $root "Alt\sub\b.txt")))
+        Check "folder: empty subfolder removed" (-not (Test-Path (Join-Path $root "Alt\sub")))
+        Check "folder: a differing file and its folder stay" (Test-Path (Join-Path $root "Alt\c.txt"))
         $last = $script:logLines | Select-Object -Last 1
-        Check "Ordner: Log nennt 2 recycelt, 1 behalten" ($last -match '2 recycled, 1 kept') $last
+        Check "folder: the log names 2 recycled, 1 kept" ($last -match '2 recycled, 1 kept') $last
 
         # nothing there under the old name: no-op
         $before = $script:logLines.Count
         Remove-RevivedRenameSource "gibts\nicht.md" "b.md"
-        Check "Alter Name fehlt: nichts passiert" ($script:logLines.Count -eq $before)
+        Check "old name missing: nothing happens" ($script:logLines.Count -eq $before)
     }
     finally { if (Test-Path $root) { Remove-Item -LiteralPath $root -Recurse -Force } }
     Remove-Item Function:\Write-Log
 }
 
 if (-not $Live) {
-    Write-Host $(if ($script:failures) { "$($script:failures) FAIL" } else { "alle PASS" })
+    Write-Host $(if ($script:failures) { "$($script:failures) FAIL" } else { "all passed" })
     exit [int]($script:failures -gt 0)
 }
 
@@ -165,26 +165,26 @@ try {
     Set-Content (Join-Path $localDir "a.md") "v1" -NoNewline
     Set-Content (Join-Path $localDir "F\x.md") "v1" -NoNewline
     $got = Wait-CloudContent "a.md" "v1"
-    Check "Vorbereitung: a.md in der Cloud" ($got -eq "v1") "Cloud: '$got'"
+    Check "setup: a.md in the cloud" ($got -eq "v1") "Cloud: '$got'"
     $got = Wait-CloudContent "F/x.md" "v1"
-    Check "Vorbereitung: F/x.md in der Cloud" ($got -eq "v1") "Cloud: '$got'"
+    Check "setup: F/x.md in the cloud" ($got -eq "v1") "Cloud: '$got'"
 
     # the 2026-10-21 case: save, rename one second later
     Set-Content (Join-Path $localDir "a.md") "v2" -NoNewline
     Start-Sleep -Seconds 1
     Rename-Item (Join-Path $localDir "a.md") "b.md"
     $got = Wait-CloudContent "b.md" "v2"
-    Check "Datei: speichern + umbenennen -> Cloud hat neuen Inhalt" ($got -eq "v2") "Cloud: '$got'"
+    Check "file: save + rename -> the cloud has the new content" ($got -eq "v2") "Cloud: '$got'"
 
     # same within a folder: edit a file, rename its folder
     Set-Content (Join-Path $localDir "F\x.md") "v2" -NoNewline
     Start-Sleep -Seconds 1
     Rename-Item (Join-Path $localDir "F") "G"
     $got = Wait-CloudContent "G/x.md" "v2"
-    Check "Ordner: speichern + Ordner umbenennen -> Cloud hat neuen Inhalt" ($got -eq "v2") "Cloud: '$got'"
+    Check "folder: save + rename the folder -> the cloud has the new content" ($got -eq "v2") "Cloud: '$got'"
 
     $left = @(& $rcloneExe lsf -R --files-only $remoteDir 2>$null)
-    Check "Cloud: keine alten Namen uebrig" (-not ($left -contains "a.md" -or $left -contains "F/x.md")) ($left -join ", ")
+    Check "cloud: no old names left" (-not ($left -contains "a.md" -or $left -contains "F/x.md")) ($left -join ", ")
 
     # The 2026-11-02 drain order: change and rename read in ONE drain, after
     # the old path is gone. That happens when both events queue up while the
@@ -202,27 +202,27 @@ try {
         [IO.File]::WriteAllText((Join-Path $localDir $src), "v3-$k")
         [IO.File]::Move((Join-Path $localDir $src), (Join-Path $localDir $dst))
         $got = Wait-CloudContent $dst "v3-$k"
-        if ($got -ne "v3-$k") { $contentOk = $false; Write-Host "  Versuch ${k}: Cloud hat '$got' statt 'v3-$k'" }
+        if ($got -ne "v3-$k") { $contentOk = $false; Write-Host "  attempt ${k}: the cloud has '$got' instead of 'v3-$k'" }
         $lines = @(Get-Content $evLog -Tail 3000)
         $chg = $lines | Where-Object { $_ -like "* fswChanged $rel\$src`t#d*" } | Select-Object -Last 1
         $ren = $lines | Where-Object { $_ -like "* fswRenamed $rel\$src -> $rel\$dst`t#d*" } | Select-Object -Last 1
         if ($chg -and $ren -and ($chg -split '#d')[-1] -eq ($ren -split '#d')[-1]) { $hit = $k }
         $src = $dst
     }
-    Check "Datei: schreiben + sofort umbenennen -> Cloud hat jedes Mal den neuen Inhalt" $contentOk
-    if ($hit) { Check "Change und Rename in derselben Sammelrunde getroffen (Versuch $hit)" $true }
-    else { Write-Host "SKIP  Change und Rename nie in derselben Sammelrunde - der Fall vom 02.11. ist nur offline geprueft" }
+    Check "file: write + rename at once -> the cloud has the new content every time" $contentOk
+    if ($hit) { Check "change and rename met in the same collection round (attempt $hit)" $true }
+    else { Write-Host "SKIP  change and rename never in the same collection round - the case of 2026-11-02 is covered offline only" }
 
     # a rename during a resync: a second process holds the bisync lock, rename,
     # let the "resync" copy the old name back down from the cloud, release it
     $lockLib = Join-Path $PSScriptRoot "single-instance.ps1"
     . $lockLib
     $lock = Join-Path $DriveSyncConfig.StateDir "sync.lock"
-    if (Test-BisyncRunning) { Check "Resync-Fall: kein echter Bisync-Lock vorhanden" $false (Get-Content $lock -TotalCount 1) }
+    if (Test-BisyncRunning) { Check "resync case: no real bisync is running" $false (Get-Content $lock -TotalCount 1) }
     else {
         Set-Content (Join-Path $localDir "r.md") "resync" -NoNewline
         $got = Wait-CloudContent "r.md" "resync"
-        Check "Resync-Fall, Vorbereitung: r.md in der Cloud" ($got -eq "resync") "Cloud: '$got'"
+        Check "resync case, setup: r.md in the cloud" ($got -eq "resync") "Cloud: '$got'"
         # encoded: Start-Process joins its arguments unquoted, the paths have spaces
         $hold = ". '$lockLib'; [void](Enter-SingleInstance 'bisync' '$lock'); Start-Sleep 600"
         $holder = Start-Process pwsh -ArgumentList "-NoProfile", "-EncodedCommand", ([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($hold))) -WindowStyle Hidden -PassThru
@@ -234,7 +234,7 @@ try {
             Rename-Item (Join-Path $localDir "r.md") "s.md"
             Start-Sleep -Seconds 5
             & $rcloneExe copyto "$remoteDir/r.md" (Join-Path $localDir "r.md") 2>$null
-            Check "Resync-Fall: alter Name lokal zurueckkopiert" (Test-Path (Join-Path $localDir "r.md"))
+            Check "resync case: old name copied back locally" (Test-Path (Join-Path $localDir "r.md"))
             Start-Sleep -Seconds 20
         }
         finally {
@@ -243,12 +243,12 @@ try {
         }
         $deadline = (Get-Date).AddSeconds(180)
         while ((Test-Path (Join-Path $localDir "r.md")) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 5 }
-        Check "Resync-Fall: Wiedergaenger r.md lokal recycelt" (-not (Test-Path (Join-Path $localDir "r.md")))
+        Check "resync case: revived r.md recycled locally" (-not (Test-Path (Join-Path $localDir "r.md")))
         $got = Wait-CloudContent "s.md" "resync"
-        Check "Resync-Fall: s.md in der Cloud" ($got -eq "resync") "Cloud: '$got'"
+        Check "resync case: s.md in the cloud" ($got -eq "resync") "Cloud: '$got'"
         Start-Sleep -Seconds 40
         $left = @(& $rcloneExe lsf --files-only $remoteDir 2>$null)
-        Check "Resync-Fall: r.md nicht in der Cloud" (-not ($left -contains "r.md")) ($left -join ", ")
+        Check "resync case: r.md not in the cloud" (-not ($left -contains "r.md")) ($left -join ", ")
     }
 }
 finally {
@@ -263,5 +263,5 @@ finally {
     & $rcloneExe purge $remoteDir 2>$null
 }
 
-Write-Host $(if ($script:failures) { "$($script:failures) FAIL" } else { "alle PASS" })
+Write-Host $(if ($script:failures) { "$($script:failures) FAIL" } else { "all passed" })
 exit [int]($script:failures -gt 0)

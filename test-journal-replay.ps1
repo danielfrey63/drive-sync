@@ -37,7 +37,7 @@ function Check([string]$name, [bool]$ok, [string]$detail = "") {
 }
 
 # ============================================================================
-Write-Host "--- Teil 1: Journal ---"
+Write-Host "--- part 1: journal ---"
 $tmp = Join-Path $root "journal"
 New-Item -ItemType Directory -Force $tmp | Out-Null
 
@@ -45,7 +45,7 @@ Add-DroppedDeletes $tmp "path1" @("a\b\c.txt", "d/e.txt", "a\b\c.txt")
 $rt = @(Read-DroppedDeletes $tmp "path1" -Claim)
 Clear-DroppedDeletes $tmp "path1"
 $after = @(Read-DroppedDeletes $tmp "path1").Count
-Check "Roundtrip: 2 Einträge, Backslashes normalisiert, danach leer" `
+Check "round trip: 2 entries, backslashes normalised, empty afterwards" `
     ($rt.Count -eq 2 -and @($rt.Rel) -contains 'a/b/c.txt' -and $after -eq 0) "$(@($rt.Rel) -join ', ')"
 
 # the race the claim exists for: a watcher appends while a batch is being
@@ -56,7 +56,7 @@ $claimed = @(Read-DroppedDeletes $tmp "path1" -Claim)
 Add-DroppedDeletes $tmp "path1" @("late.txt")           # the watcher, mid-flush
 Clear-DroppedDeletes $tmp "path1"
 $survived = @(Read-DroppedDeletes $tmp "path1")
-Check "Nebenläufiger Anhang: early.txt geclaimt, late.txt überlebt" `
+Check "concurrent append: early.txt claimed, late.txt survives" `
     ($claimed.Count -eq 1 -and @($claimed.Rel)[0] -eq 'early.txt' -and $survived.Count -eq 1 -and @($survived.Rel)[0] -eq 'late.txt')
 
 # consumer died between claim and clear: the batch must not be lost, and the
@@ -67,16 +67,16 @@ Add-DroppedDeletes $tmp "path1" @("orphan.txt")
 Add-DroppedDeletes $tmp "path1" @("next.txt")
 $recovered = @(Read-DroppedDeletes $tmp "path1" -Claim | ForEach-Object { $_.Rel } | Sort-Object)
 Clear-DroppedDeletes $tmp "path1" -All
-Check "Abgestürzter Konsument: next.txt + orphan.txt" `
+Check "crashed consumer: next.txt + orphan.txt" `
     ($recovered.Count -eq 2 -and $recovered[0] -eq 'next.txt' -and $recovered[1] -eq 'orphan.txt') ($recovered -join ', ')
 
 $topmost = @(Select-TopmostPaths @("a/b", "a/b/c.txt", "a/b/sub/d.txt", "a/bc.txt", "d", "A/B/x.txt") | Sort-Object)
-Check "Zusammenfassen auf gelöschte Ordner" (($topmost -join '|') -eq 'a/b|a/bc.txt|d') ($topmost -join '|')
+Check "folding into deleted folders" (($topmost -join '|') -eq 'a/b|a/bc.txt|d') ($topmost -join '|')
 $topWin = @(Select-TopmostPaths @("a\b", "a\b\c.txt", "e.txt") '\' | Sort-Object)
-Check "Zusammenfassen mit Backslash-Pfaden" (($topWin -join '|') -eq 'a\b|e.txt') ($topWin -join '|')
+Check "folding with backslash paths" (($topWin -join '|') -eq 'a\b|e.txt') ($topWin -join '|')
 
 # ============================================================================
-Write-Host "`n--- Teil 2: Replay gegen echtes rclone bisync ---"
+Write-Host "`n--- part 2: replay against a real rclone bisync ---"
 Write-Host "rclone:  $rclone"
 Write-Host "scratch: $root"
 
@@ -129,7 +129,7 @@ $s = New-Scratch
 Add-Both $s "neu.txt"
 Remove-Item (Join-Path $s.P1 "neu.txt")
 $exit = Invoke-Bisync $s
-Check "A) ohne Replay kippt die Löschung zur Wiederherstellung (Vorfall 05.09.)" ($exit -eq 0 -and (On1 $s "neu.txt") -and (On2 $s "neu.txt"))
+Check "A) without the replay the delete turns into a restore (incident of 2026-09-05)" ($exit -eq 0 -and (On1 $s "neu.txt") -and (On2 $s "neu.txt"))
 
 # --- B: path1, a file and a whole tree -----------------------------------------
 $s = New-Scratch
@@ -138,10 +138,10 @@ Remove-Item (Join-Path $s.P1 "neu.txt"); Remove-Item (Join-Path $s.P1 "tree") -R
 Add-DroppedDeletes $s.State "path1" @("neu.txt", "tree", "tree\a.txt")
 $r = Invoke-Replay $s "path1"
 $gone2 = -not (On2 $s "neu.txt") -and -not (On2 $s "tree\a.txt") -and -not (On2 $s "tree\sub\b.txt")
-Check "B) path1: Datei und Ordner auf der Gegenseite gelöscht, Journal geleert" `
+Check "B) path1: file and folder deleted on the other side, journal emptied" `
     ($r.Ok -and $r.Done -eq 3 -and $r.Pending -eq 2 -and $gone2 -and (Pending $s "path1") -eq 0) "done=$($r.Done) pending=$($r.Pending)"
 $exit = Invoke-Bisync $s
-Check "B) danach bringt bisync nichts zurück, Altbestand bleibt" `
+Check "B) bisync brings nothing back afterwards, older files stay" `
     ($exit -eq 0 -and -not (On1 $s "neu.txt") -and -not (On1 $s "tree\a.txt") -and (On1 $s "alt-1.txt") -and (On2 $s "alt-1.txt"))
 
 # --- C: path1, the surviving copy changed after our delete -----------------------
@@ -153,7 +153,7 @@ Start-Sleep -Milliseconds 2100   # the bound has a second of slack
 Add-Content (Join-Path $s.P2 "neu.txt") " changed on another device" -NoNewline
 $r = Invoke-Replay $s "path1"
 $exit = Invoke-Bisync $s
-Check "C) path1: Fremdänderung nach der Löschung bleibt und kommt zurück" `
+Check "C) path1: a foreign change after the delete stays and comes back" `
     ($r.Ok -and $r.Done -eq 0 -and $r.Kept -eq 1 -and $exit -eq 0 -and (On2 $s "neu.txt") -and (On1 $s "neu.txt")) "kept=$($r.Kept)"
 
 # --- D: path1, recreated locally --------------------------------------------------
@@ -161,7 +161,7 @@ $s = New-Scratch
 Add-Both $s "neu.txt"
 Add-DroppedDeletes $s.State "path1" @("neu.txt")
 $r = Invoke-Replay $s "path1"
-Check "D) path1: lokal wieder vorhanden - Eintrag verfällt, nichts gelöscht" `
+Check "D) path1: present locally again - entry lapses, nothing deleted" `
     ($r.Ok -and $r.Pending -eq 0 -and $r.Done -eq 0 -and (On2 $s "neu.txt") -and (Pending $s "path1") -eq 0)
 
 # --- E: dry run -----------------------------------------------------------------------
@@ -173,7 +173,7 @@ $r1 = Invoke-Replay $s "path1" -DryRun
 $r2 = Invoke-Replay $s "path1" -DryRun
 $claimLeft = Test-Path (Get-DeleteClaimPath $s.State "path1")
 $said = @($s.Lines | Where-Object { $_ -match 'DRYRUN would trash in the cloud: neu\.txt' }).Count
-Check "E) Trockenlauf, zweimal: nichts gelöscht, Journal unberührt, Bericht da" `
+Check "E) dry run, twice: nothing deleted, journal untouched, report written" `
     ($r1.Ok -and $r2.Ok -and $r1.Done -eq 0 -and (On2 $s "neu.txt") -and (Pending $s "path1") -eq 1 -and -not $claimLeft -and $said -eq 2) "gemeldet=$said"
 
 # --- F: path2, a file and a whole tree -------------------------------------------
@@ -182,10 +182,10 @@ Add-Both $s "neu.txt"; Add-Both $s "tree\a.txt"; Add-Both $s "tree\sub\b.txt"
 Remove-Item (Join-Path $s.P2 "neu.txt"); Remove-Item (Join-Path $s.P2 "tree") -Recurse
 Add-DroppedDeletes $s.State "path2" @("neu.txt", "tree")
 $r = Invoke-Replay $s "path2"
-Check "F) path2: lokale Datei und lokaler Ordner entfernt, Journal geleert" `
+Check "F) path2: local file and local folder removed, journal emptied" `
     ($r.Ok -and $r.Done -eq 2 -and -not (On1 $s "neu.txt") -and -not (On1 $s "tree") -and (Pending $s "path2") -eq 0) "done=$($r.Done)"
 $exit = Invoke-Bisync $s
-Check "F) danach lädt bisync nichts wieder hoch" ($exit -eq 0 -and -not (On2 $s "neu.txt") -and -not (On2 $s "tree\a.txt") -and (On2 $s "alt-1.txt"))
+Check "F) bisync uploads nothing again afterwards" ($exit -eq 0 -and -not (On2 $s "neu.txt") -and -not (On2 $s "tree\a.txt") -and (On2 $s "alt-1.txt"))
 
 # --- G: path2, local copy changed after the cloud delete; one file of a tree ----
 $s = New-Scratch
@@ -196,7 +196,7 @@ Start-Sleep -Milliseconds 2100
 Add-Content (Join-Path $s.P1 "neu.txt") " edited here" -NoNewline
 Add-Content (Join-Path $s.P1 "tree\b.txt") " edited here" -NoNewline
 $r = Invoke-Replay $s "path2"
-Check "G) path2: lokal Geändertes bleibt, der Rest des Ordners geht einzeln" `
+Check "G) path2: what changed locally stays, the rest of the folder goes file by file" `
     ($r.Ok -and $r.Kept -eq 2 -and $r.Done -eq 1 -and (On1 $s "neu.txt") -and (On1 $s "tree\b.txt") -and -not (On1 $s "tree\a.txt")) "kept=$($r.Kept) done=$($r.Done)"
 
 # --- H: path2, live in the cloud again ------------------------------------------------
@@ -204,7 +204,7 @@ $s = New-Scratch
 Add-Both $s "neu.txt"
 Add-DroppedDeletes $s.State "path2" @("neu.txt")
 $r = Invoke-Replay $s "path2"
-Check "H) path2: in der Cloud wieder vorhanden - lokale Kopie bleibt" ($r.Ok -and $r.Done -eq 0 -and (On1 $s "neu.txt"))
+Check "H) path2: present in the cloud again - the local copy stays" ($r.Ok -and $r.Done -eq 0 -and (On1 $s "neu.txt"))
 
 # --- I: the other side cannot be reached ---------------------------------------------
 $s = New-Scratch
@@ -212,11 +212,11 @@ Add-Both $s "neu.txt"
 Remove-Item (Join-Path $s.P1 "neu.txt")
 Add-DroppedDeletes $s.State "path1" @("neu.txt")
 $r = Invoke-Replay $s "path1" -Remote "drive-sync-test-no-such-remote:"
-Check "I) Gegenseite nicht erreichbar: Fehler gemeldet, Stapel bleibt erhalten" `
+Check "I) other side unreachable: error reported, the batch is kept" `
     (-not $r.Ok -and $r.Error -and (On2 $s "neu.txt") -and (Pending $s "path1") -eq 1) $r.Error
 Add-DroppedDeletes $s.State "path1" @("alt-9.txt")   # the watcher keeps journalling meanwhile
 $r = Invoke-Replay $s "path1"
-Check "I) der nächste Lauf holt den Stapel nach" ($r.Ok -and $r.Journalled -eq 2 -and $r.Done -eq 1 -and -not (On2 $s "neu.txt") -and (Pending $s "path1") -eq 0)
+Check "I) the next run catches up on the batch" ($r.Ok -and $r.Journalled -eq 2 -and $r.Done -eq 1 -and -not (On2 $s "neu.txt") -and (Pending $s "path1") -eq 0)
 
 # --- J: filters and scope ------------------------------------------------------------
 $s = New-Scratch
@@ -227,15 +227,15 @@ Add-Both $s "one\a.txt"; Add-Both $s "one\x.tmp"; Add-Both $s "two\b.txt"; Add-B
 Remove-Item (Join-Path $s.P1 "one") -Recurse; Remove-Item (Join-Path $s.P1 "two") -Recurse
 Add-DroppedDeletes $s.State "path1" @("one\a.txt", "one\x.tmp", "two")
 $r = Invoke-Replay $s "path1" -Rules $rules -Scope "one"
-Check "J) Scope: nur der Teilbaum, Ausgeschlossenes bleibt, Journal unberührt" `
+Check "J) scope: only the subtree, excluded paths stay, journal untouched" `
     ($r.Ok -and $r.Done -eq 1 -and -not (On2 $s "one\a.txt") -and (On2 $s "one\x.tmp") -and (On2 $s "two\b.txt") -and (Pending $s "path1") -eq 3) "done=$($r.Done)"
 $r = Invoke-Replay $s "path1" -Rules $rules
-Check "J) ohne Scope: Ordner gelöscht bis auf Ausgeschlossenes" `
+Check "J) without scope: folder deleted except for excluded paths" `
     ($r.Ok -and $r.Done -eq 1 -and -not (On2 $s "two\b.txt") -and (On2 $s "two\cache\c.txt") -and (On2 $s "one\x.tmp") -and (Pending $s "path1") -eq 0) "done=$($r.Done)"
 
-if ($Keep) { Write-Host "`nscratch behalten: $root" }
+if ($Keep) { Write-Host "`nscratch kept: $root" }
 else { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
 
-if ($script:failed -eq 0) { Write-Host "`nALLES PASS"; exit 0 }
-Write-Host "`nFEHLGESCHLAGEN: $($script:failed)"
+if ($script:failed -eq 0) { Write-Host "`nALL PASS"; exit 0 }
+Write-Host "`nFAILED: $($script:failed)"
 exit 1

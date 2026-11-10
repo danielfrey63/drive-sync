@@ -270,6 +270,7 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 | `test-liveness.ps1` | tests for `liveness.ps1` (local only) |
 | `single-instance.ps1` | instance lock for the watchers and the bisync wrapper (named mutex, PID file beside it), and the question "is a bisync running" for everyone else |
 | `test-single-instance.ps1` | tests for the lock across processes, including a holder that is killed (local only) |
+| `run-tests.ps1` | runs all offline tests in parallel, one line per test, full output of a failing one; `-IfStaged` for the pre-commit hook |
 | `test-pending-rename.ps1` | an upload pending when its file or folder is renamed follows the new name, and a copy a resync brought back under the old name is recycled; `-Live` runs it against the watcher and the cloud in `Temp\` |
 | `test-filters.ps1` | the watchers' exclude logic (`filter-rules.ps1`) must give rclone's answer for a sample of every rule in `filters.txt` – run it after each filter change (local only) |
 | `test-alerts.ps1` | tests for `notify.ps1`; `-Live` shows one real test toast |
@@ -286,7 +287,8 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 - **Unicode names: compare ordinally.** The same accented letter can be stored composed (NFC, `é` = U+00E9) or decomposed (NFD, `e` + U+0301). NTFS keeps both spellings as two files, Drive and rclone treat them as one name. PowerShell's `-eq`, `-ceq` and `-ieq` call such strings equal, so a check built on them cannot see the difference – on 2026-11-07 it hid 98 NFC/NFD pairs. Use `[string]::CompareOrdinal`, or collections with `[StringComparer]::Ordinal`/`OrdinalIgnoreCase`, wherever two names must be told apart.
 - **rclone output is UTF-8.** `config.ps1` sets the console encoding for every script; without it the hidden tasks decode rclone's output as ibm850 and names with umlauts or arrows no longer match (the guard recycled 5 live files that way on 2026-11-07).
 - **Filter changes need a resync**, and `test-filters.ps1` afterwards: bisync tracks the filter file, and the watchers read the same file through their own parser.
-- **Write files with CRLF.** `githooks/check-text.sh` rejects anything else (run `install-git-hook.ps1` once per clone); the Write tool and heredocs produce LF.
+- **Write files with CRLF.** `githooks/check-text.sh` rejects anything else; the Write tool and heredocs produce LF.
+- **Run the tests.** `pwsh -File run-tests.ps1` runs every offline test side by side (about 30 s, no cloud access); `run-tests.ps1 liveness` only those with that word in the name. The pre-commit hook runs them whenever a script or `filters.txt` is part of the commit. `install-git-hook.ps1` installs the text check and the tests into the hook, once per clone and again after it changed; `.git/` is not synced.
 
 ## License
 

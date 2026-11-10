@@ -29,40 +29,40 @@ try {
     $script:toastScript = $fake
     function Calls { @(Get-Content $calls -ErrorAction SilentlyContinue) }
 
-    Check "erster Alarm wird gezeigt" ((Send-DriveSyncAlert -Key "k1" -Title "T1" -Body "B") -and (Calls).Count -eq 1)
-    Check "Toast bleibt im Action Center (Reminder) unter eigener App-Id" (@(Calls)[0] -eq "DriveSync.Alerts|True|T1") (@(Calls)[0])
-    Check "Wiederholung innert 12 h wird unterdrueckt" (-not (Send-DriveSyncAlert -Key "k1" -Title "T1") -and (Calls).Count -eq 1)
-    Check "anderer Schluessel kommt durch" ((Send-DriveSyncAlert -Key "k2" -Title "T2") -and (Calls).Count -eq 2)
-    Check "-Force ignoriert die Sperrfrist" ((Send-DriveSyncAlert -Key "k1" -Title "T1" -Force) -and (Calls).Count -eq 3)
+    Check "first alert is shown" ((Send-DriveSyncAlert -Key "k1" -Title "T1" -Body "B") -and (Calls).Count -eq 1)
+    Check "toast stays in the Action Center (reminder) under its own app id" (@(Calls)[0] -eq "DriveSync.Alerts|True|T1") (@(Calls)[0])
+    Check "a repeat within 12 h is suppressed" (-not (Send-DriveSyncAlert -Key "k1" -Title "T1") -and (Calls).Count -eq 1)
+    Check "another key gets through" ((Send-DriveSyncAlert -Key "k2" -Title "T2") -and (Calls).Count -eq 2)
+    Check "-Force ignores the repeat window" ((Send-DriveSyncAlert -Key "k1" -Title "T1" -Force) -and (Calls).Count -eq 3)
 
     Clear-DriveSyncAlert "k1"
-    Check "nach Clear meldet derselbe Schluessel sofort wieder" ((Send-DriveSyncAlert -Key "k1" -Title "T1") -and (Calls).Count -eq 4)
+    Check "after Clear the same key alerts again at once" ((Send-DriveSyncAlert -Key "k1" -Title "T1") -and (Calls).Count -eq 4)
 
     # an entry older than the repeat window fires again
     $st = Get-Content (Join-Path $scratch "alerts.json") -Raw | ConvertFrom-Json
     $st.k2 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 13 * 3600
     Set-Content (Join-Path $scratch "alerts.json") ($st | ConvertTo-Json -Compress)
-    Check "nach Ablauf der Sperrfrist wird wiederholt" ((Send-DriveSyncAlert -Key "k2" -Title "T2") -and (Calls).Count -eq 5)
+    Check "repeated once the repeat window is over" ((Send-DriveSyncAlert -Key "k2" -Title "T2") -and (Calls).Count -eq 5)
 
-    Check "jeder Alarm steht in alerts.log" (@(AlertLog | Where-Object { $_ -match 'ALERT \[' }).Count -eq 5)
+    Check "every alert is in alerts.log" (@(AlertLog | Where-Object { $_ -match 'ALERT \[' }).Count -eq 5)
 
     # helper missing: logged, no error for the caller
     $script:toastScript = Join-Path $scratch "nope.ps1"
     $r = Send-DriveSyncAlert -Key "k3" -Title "T3"
-    Check "fehlender Toast-Helfer: kein Fehler, nur Log" ((-not $r) -and (AlertLog | Where-Object { $_ -match 'toast helper missing' }))
+    Check "missing toast helper: no error, log only" ((-not $r) -and (AlertLog | Where-Object { $_ -match 'toast helper missing' }))
 
     # broken helper: must not throw either
     Set-Content $fake "throw 'boom'"
     $script:toastScript = $fake
     $r = Send-DriveSyncAlert -Key "k4" -Title "T4"
-    Check "kaputter Toast-Helfer wirft nicht" ((-not $r) -and (AlertLog | Where-Object { $_ -match 'WARN alert \[k4\].*boom' }))
+    Check "a broken toast helper does not throw" ((-not $r) -and (AlertLog | Where-Object { $_ -match 'WARN alert \[k4\].*boom' }))
 
     # corrupt state file: fail-open, alert still goes out
     Set-Content (Join-Path $scratch "alerts.json") "{kaputt"
     Set-Content $fake "param([string]`$Title, [string]`$Body, [switch]`$Reminder, [string]`$AppId, [string]`$AppName) Add-Content '$calls' `"`$AppId|`$Reminder|`$Title`""
-    Check "kaputte alerts.json blockiert keinen Alarm" (Send-DriveSyncAlert -Key "k5" -Title "T5")
+    Check "a broken alerts.json blocks no alert" (Send-DriveSyncAlert -Key "k5" -Title "T5")
 
-    Check "Toast-Helfer der ai-toolbox ist auffindbar" (Test-Path $realToast) $realToast
+    Check "the ai-toolbox toast helper is found" (Test-Path $realToast) $realToast
 
     foreach ($a in @(Get-DriveSyncOpenAlerts)) { Clear-DriveSyncAlert $a.Key }
     foreach ($k in "watcher-up", "conflict-review", "upload-stuck") { [void](Send-DriveSyncAlert -Key $k -Title "T3") }
@@ -75,7 +75,7 @@ try {
     if ($Live) {
         $script:toastScript = $realToast
         Clear-DriveSyncAlert "test-live"
-        Check "Live-Toast an Windows uebergeben" (Send-DriveSyncAlert -Key "test-live" -Title "Drive-Sync: Testalarm" -Body "Wenn du das siehst, funktionieren die Warnungen. Einfach wegklicken.")
+        Check "live toast handed to Windows" (Send-DriveSyncAlert -Key "test-live" -Title "Drive-Sync: Testalarm" -Body "Wenn du das siehst, funktionieren die Warnungen. Einfach wegklicken.")
     }
 }
 finally {

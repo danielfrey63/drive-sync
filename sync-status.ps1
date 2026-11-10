@@ -181,9 +181,8 @@ $hooksDir = & git -C $PSScriptRoot rev-parse --git-path hooks 2>$null
 if ($hooksDir) {
     if (-not [IO.Path]::IsPathRooted($hooksDir)) { $hooksDir = Join-Path $PSScriptRoot $hooksDir }
     $hook = Join-Path $hooksDir "pre-commit"
-    if (-not ((Test-Path $hook) -and (Select-String -Path $hook -Pattern 'drive-sync:check-text' -SimpleMatch -Quiet))) {
-        Report 'WARN' "pre-commit hook of this clone lacks the text check - install-git-hook.ps1"
-    }
+    $missing = @('drive-sync:check-text', 'drive-sync:run-tests' | Where-Object { -not ((Test-Path $hook) -and (Select-String -Path $hook -Pattern $_ -SimpleMatch -Quiet)) })
+    if ($missing) { Report 'WARN' "pre-commit hook of this clone lacks $($missing -join ' and ') - install-git-hook.ps1" }
 }
 
 ""
