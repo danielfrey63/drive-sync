@@ -10,10 +10,12 @@
 #  - Renames become server-side "rclone moveto" (no re-upload); if the old
 #    path does not exist in the cloud, the new path is uploaded instead.
 #  - Deletes are verified at flush time (path must really be gone locally),
-#    capped at $maxDeletes per flush and go to the Drive TRASH (30 days) -
-#    never hard-deleted. A storm above the cap is NOT simply dropped: its
-#    paths are journalled (delete-journal.ps1), because bisync alone cannot
-#    always read them as deletions - see there.
+#    folded (a removed folder counts once), capped at $maxDeletes per flush
+#    and go to the Drive TRASH (30 days) - never hard-deleted. A storm above
+#    the cap is NOT simply dropped: its paths are journalled
+#    (delete-journal.ps1) and carried out before the next bisync
+#    (journal-replay.ps1), because bisync alone cannot always read them as
+#    deletions - see there.
 #  - Exclude rules are DERIVED FROM filters.txt (shared filter-rules.ps1).
 #  - While the bisync wrapper's lock is active, flushing is deferred.
 #  - Watcher buffer overflows are only logged: the nightly bisync catches up.
@@ -509,26 +511,40 @@ try {
                 }
             }
 
-            # 3) deletes: verify, cap, then move to the Drive trash
-            if ($deletes.Count -gt $maxDeletes) {
-                # The cap is right - a runaway delete must not propagate at
-                # once. But handing the storm to bisync without a record does
-                # not defer the delete, it can invert it: bisync compares
-                # against the previous baseline, and a path created after that
-                # baseline is not in it, so bisync reads "new on path2" and
-                # copies the file back. Journal what we drop.
-                if ($journalDrops) { Add-DroppedDeletes $stateDir "path1" @($deletes) }
-                Write-Log "WARN $($deletes.Count) deletes exceed cap $maxDeletes - journalled for the nightly bisync"
+            # 3) deletes: verify, fold, cap, then move to the Drive trash
+            if ($deletes.Count -gt 0) {
+                $delList = @($deletes)
                 $deletes.Clear()
-            }
-            elseif ($deletes.Count -gt 0) {
-                $delList = @($deletes | Sort-Object)
-                $deletes.Clear()
-                $todo = [System.Collections.Generic.List[string]]::new()
+                # Verify and fold BEFORE counting. The cap is there to stop a
+                # runaway delete from propagating at once, so it has to count
+                # what would actually be deleted: a path that is back on disk
+                # is no delete, and a removed folder is ONE delete however
+                # many events its content raised (2026-11-09: one removed
+                # worktree, 457 events, hit the cap although a single purge
+                # would have done).
+                $gone = [System.Collections.Generic.List[string]]::new()
                 foreach ($d in $delList) {
-                    if (Test-Path -LiteralPath (Join-Path $root $d)) { $intentDone.Add($d); continue }   # recreated meanwhile
-                    if (@($delList | Where-Object { $_ -ne $d -and $d.StartsWith("$_\") }).Count -gt 0) { $intentDone.Add($d); continue }   # ancestor dir covers it
-                    $todo.Add($d)
+                    if (Test-Path -LiteralPath (Join-Path $root $d)) { $intentDone.Add($d) }   # recreated meanwhile
+                    else { $gone.Add($d) }
+                }
+                $todo = [System.Collections.Generic.List[string]]::new()
+                foreach ($d in @(Select-TopmostPaths @($gone) '\' | Sort-Object)) { $todo.Add($d) }
+                if ($todo.Count -gt $maxDeletes) {
+                    # Handing the storm to bisync without a record would not
+                    # defer the delete, it could invert it: bisync compares
+                    # against the previous baseline, and a path created after
+                    # that baseline is not in it, so bisync reads "new on
+                    # path2" and copies the file back. Journal what we drop -
+                    # journal-replay.ps1 carries it out before the next bisync.
+                    # The local intent stays open so the cloud watcher does
+                    # not fetch the paths back in the meantime.
+                    if ($journalDrops) { Add-DroppedDeletes $stateDir "path1" @($todo) }
+                    Write-Log "WARN $($todo.Count) deletes exceed cap $maxDeletes - journalled, carried out before the next bisync"
+                    $todo.Clear()
+                }
+                else {
+                    $top = [System.Collections.Generic.HashSet[string]]::new([string[]]@($todo), [System.StringComparer]::OrdinalIgnoreCase)
+                    foreach ($d in $gone) { if (-not $top.Contains($d)) { $intentDone.Add($d) } }   # ancestor dir covers it
                 }
                 # One listing and one delete for all plain files: a stat plus a
                 # deletefile per path cost ~11 s each, 76 deletes took 18 min

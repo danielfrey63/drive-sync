@@ -97,7 +97,7 @@ Defaults live in [`config.ps1`](config.ps1); machine-specific overrides go into 
 | `LocalRoot` | local mirror root | `D:\Meine Ablage` |
 | `RemoteName` | rclone remote name | `gdrive` |
 | `StateDir` | runtime state (logs, locks, cursors) | `%LOCALAPPDATA%\drive-sync` |
-| `MaxDeletes` | reactive delete cap per flush; larger storms are journalled and carried out before the next bisync | `50` |
+| `MaxDeletes` | reactive delete cap per flush, counted after verification: a removed folder is one delete, a path that is back (upload side) or already gone locally (download side) is none; larger storms are journalled and carried out before the next bisync | `50` |
 | `JournalDroppedDeletes` | record the paths a `MaxDeletes` storm dropped and carry those deletes out before every bisync; without it bisync copies back every dropped path that is younger than its baseline | `$true` |
 | `PollSeconds` | Changes API poll interval | `60` |
 | `BisyncDailyAt` | daily start time of the reconciliation bisync (`HH:mm`) | `04:00` |

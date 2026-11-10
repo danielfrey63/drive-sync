@@ -13,8 +13,10 @@
 #  - FILE changes are downloaded via "rclone copy --files-from-raw
 #    --no-traverse --update" (--update never overwrites a newer local file).
 #  - Cloud-side TRASHING moves the local copy to the Windows recycle bin
-#    (never a hard delete), capped at $maxDeletes per cycle. A storm above
-#    the cap is journalled (delete-journal.ps1) rather than dropped.
+#    (never a hard delete), capped at $maxDeletes per cycle. Only paths that
+#    still exist locally count - the echo of our own deletes does not. A
+#    storm above the cap is journalled (delete-journal.ps1) rather than
+#    dropped; journal-replay.ps1 carries it out before the next bisync.
 #  - Cloud-side folder RENAMES and permanent deletions are left to the
 #    nightly bisync (resolving the old local path would need a full
 #    fileId->path index).
@@ -300,21 +302,32 @@ try {
                 }
 
                 # 2) cloud trash -> local recycle bin (verified, capped)
-                if ($trash.Count -gt $maxDeletes) {
+                if ($trash.Count -gt 0) {
+                    # Count what a trash event would actually remove here. The
+                    # echo of a delete this machine sent up itself names paths
+                    # that are gone locally already - on 2026-11-10 all 473
+                    # events of one cycle were such echoes, and they hit the
+                    # cap and filled the journal with nothing to do.
+                    $present = @($trash | Where-Object { Test-Path -LiteralPath (Join-Path $root $_) })
+                    $trash.Clear()
+                    $doomed = @(Select-TopmostPaths $present '\' | Sort-Object)
+                }
+                else { $doomed = @() }
+                if ($doomed.Count -gt $maxDeletes) {
                     # Mirror of the path1 case in watch-drive.ps1: handing a
                     # trash storm to bisync without a record can invert it.
                     # A file created on another device after the last
                     # baseline, downloaded here, then deleted there is not in
                     # that baseline - bisync reads "new on path1" and uploads
-                    # it back. Journal what we drop.
-                    if ($journalDrops) { Add-DroppedDeletes $stateDir "path2" @($trash) }
-                    Write-Log "WARN $($trash.Count) trashed paths exceed cap $maxDeletes - journalled for the nightly bisync"
-                    $trash.Clear()
+                    # it back. Journal what we drop - journal-replay.ps1
+                    # carries it out before the next bisync.
+                    if ($journalDrops) { Add-DroppedDeletes $stateDir "path2" $doomed }
+                    Write-Log "WARN $($doomed.Count) trashed paths exceed cap $maxDeletes - journalled, carried out before the next bisync"
                 }
-                elseif ($trash.Count -gt 0) {
+                elseif ($doomed.Count -gt 0) {
                     # path-only on purpose: a trash event carries no state to compare
                     $recentT = Get-UploadLedger $stateDir
-                    foreach ($t in @($trash | Sort-Object)) {
+                    foreach ($t in $doomed) {
                         $abs = Join-Path $root $t
                         if (-not (Test-Path -LiteralPath $abs)) { continue }   # already gone locally
                         # echo control for trash too: our own uploads produce
@@ -333,7 +346,6 @@ try {
                         if ($rc -eq 0) { $recycledTotal++; Write-Log "cloud trash -> recycle bin: $t" }
                         else { Write-Log "WARN recycle failed (rc=$rc): $t" }
                     }
-                    $trash.Clear()
                 }
 
                 if ($didWork) {
