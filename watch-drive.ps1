@@ -42,7 +42,6 @@ $logFile = Join-Path $stateDir "watcher.log"
 trap { try { Add-Content $logFile "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') FATAL: $($_.Exception.Message)" } catch {}; break }
 $statusFile = Join-Path $stateDir "watcher-status.json"
 $lockFile = Join-Path $stateDir "watcher.lock"
-$bisyncLock = Join-Path $stateDir "sync.lock"
 
 # --- single instance, before the slow start-up (single-instance.ps1) ---------
 . (Join-Path $PSScriptRoot "single-instance.ps1")
@@ -175,12 +174,6 @@ function Add-ChangedPath([string]$abs, [string]$rel) {
     if (-not (Test-Path -LiteralPath $abs -PathType Container)) { [void]$pending.Add($rel) }
 }
 
-function Test-BisyncRunning {
-    if (-not (Test-Path $bisyncLock)) { return $false }
-    $lockPid = Get-Content $bisyncLock -ErrorAction SilentlyContinue | Select-Object -First 1
-    return [bool]($lockPid -and (Get-Process -Id $lockPid -ErrorAction SilentlyContinue))
-}
-
 # A rename that waited out a bisync is checked after its server-side move: a
 # --resync merges both sides without deleting, sees the old name in the cloud
 # and the new one on disk, and copies the old name back down. The m4a moved
@@ -309,7 +302,7 @@ try {
     }
     if (Test-BisyncRunning) {
         # stamp untouched: the bisync reconciles the gap, the heartbeat takes over
-        Write-Log "catch-up skipped: bisync (PID $(Get-Content $bisyncLock -TotalCount 1)) is running and reconciles the gap"
+        Write-Log "catch-up skipped: a bisync is running and reconciles the gap"
     }
     elseif ($null -eq $lastSeen) {
         Write-Log "catch-up skipped: no liveness stamp yet (first run)"
@@ -430,7 +423,7 @@ try {
         $overdue = $oldestPending -and ((Get-Date) - $oldestPending).TotalSeconds -ge 60
         if (-not ($quiet -or $overdue)) { continue }
 
-        # defer while the nightly bisync holds its lock
+        # defer while a bisync holds its lock (Test-BisyncRunning, single-instance.ps1)
         if ($bisyncRunning) { continue }
         # nothing but uploads queued, and those are paused after a failed batch
         if (($renames.Count + $deletes.Count) -eq 0 -and (Get-Date) -lt $uploadHoldUntil) { continue }

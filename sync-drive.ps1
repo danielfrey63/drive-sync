@@ -1,8 +1,8 @@
 # Operational wrapper for the "D:\Meine Ablage" <-> gdrive: bisync.
 # Replaces Google DriveFS (decommissioned 2026-08; see HANDOVER doc).
 #
-# - Lock file prevents overlapping runs (stale locks from dead processes are
-#   cleared automatically).
+# - A named mutex prevents overlapping runs and tells the watchers to hold
+#   their flushes (single-instance.ps1); sync.lock only names the PID.
 # - Logs go to %LOCALAPPDATA%\drive-sync\logs, one file per run, last 30 kept.
 # - status.json records the last run and the last SUCCESSFUL run for the
 #   status check / monitoring.
@@ -104,16 +104,14 @@ if (-not $Resync -and -not $DryRun -and -not $AllowStaleBaseline -and (Test-Path
 }
 
 # --- lock handling ----------------------------------------------------------
-if (Test-Path $lockFile) {
-    $lockPid = Get-Content $lockFile -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($lockPid -and (Get-Process -Id $lockPid -ErrorAction SilentlyContinue)) {
-        Write-Host "Another sync run (PID $lockPid) is active - exiting."
-        exit 0
-    }
-    Write-Host "Removing stale lock (PID $lockPid no longer running)."
-    Remove-Item $lockFile -Force -Confirm:$false
+# The mutex is the lock; the file only tells a human which PID holds it. A
+# file left behind by a killed run means nothing and is overwritten.
+. (Join-Path $PSScriptRoot "single-instance.ps1")
+$script:instance = Enter-SingleInstance "bisync" $lockFile
+if (-not $script:instance) {
+    Write-Host "Another sync run (PID $(Get-Content $lockFile -TotalCount 1 -ErrorAction SilentlyContinue)) is active - exiting."
+    exit 0
 }
-Set-Content -Path $lockFile -Value $PID
 
 try {
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -321,5 +319,5 @@ try {
     exit $exit
 }
 finally {
-    Remove-Item $lockFile -Force -Confirm:$false -ErrorAction SilentlyContinue
+    Exit-SingleInstance $script:instance $lockFile
 }

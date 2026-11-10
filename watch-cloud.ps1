@@ -61,7 +61,6 @@ if (-not $script:instance) {
 . (Join-Path $PSScriptRoot "liveness.ps1")
 $aliveFile = Join-Path $stateDir "cloud-watcher.alive"
 $tokenFile = Join-Path $stateDir "cloud-watcher-pagetoken.txt"
-$bisyncLock = Join-Path $stateDir "sync.lock"
 $maxDeletes = $DriveSyncConfig.MaxDeletes
 $journalDrops = [bool]$DriveSyncConfig.JournalDroppedDeletes
 New-Item -ItemType Directory -Force $stateDir | Out-Null
@@ -216,12 +215,8 @@ try {
             else { Write-Log "WARN poll failed: $($_.Exception.Message)" }
         }
 
-        # defer while the nightly bisync holds its lock
-        $bisyncActive = $false
-        if (Test-Path $bisyncLock) {
-            $lockPid = Get-Content $bisyncLock -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($lockPid -and (Get-Process -Id $lockPid -ErrorAction SilentlyContinue)) { $bisyncActive = $true }
-        }
+        # defer while a bisync holds its lock (single-instance.ps1)
+        $bisyncActive = Test-BisyncRunning
 
         if (-not $bisyncActive) {
             # the flush cycle must never kill the watcher - log and carry on

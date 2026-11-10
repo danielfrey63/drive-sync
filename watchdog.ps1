@@ -48,6 +48,7 @@ if (Test-Path $pauseFile) {
 
 . (Join-Path $PSScriptRoot "notify.ps1")
 . (Join-Path $PSScriptRoot "liveness.ps1")
+. (Join-Path $PSScriptRoot "single-instance.ps1")
 
 $watchers = @(
     @{ Task = "DriveSync watcher"; Key = "watcher-up"; Lock = Join-Path $stateDir "watcher.lock"; Alive = Join-Path $stateDir "watcher.alive"
@@ -183,11 +184,9 @@ try {
     if ($real) { $statusLast = [datetime]$real.start }
 }
 catch {}
-$syncPid = Get-Content (Join-Path $stateDir "sync.lock") -ErrorAction SilentlyContinue | Select-Object -First 1
-$syncRunning = [bool]($syncPid -and (Get-Process -Id $syncPid -ErrorAction SilentlyContinue))
 $staleH = if ($DriveSyncConfig.AlertStaleSyncHours) { [double]$DriveSyncConfig.AlertStaleSyncHours } else { 36 }
 $problem = Get-NightlyProblem -taskExists ([bool]$nightTask) -taskState "$($nightTask.State)" -taskLastRun $taskLast `
-    -taskLastResult ([long]$nightInfo.LastTaskResult) -lastStatusRun $statusLast -running $syncRunning -now (Get-Date) -staleHours $staleH
+    -taskLastResult ([long]$nightInfo.LastTaskResult) -lastStatusRun $statusLast -running (Test-BisyncRunning) -now (Get-Date) -staleHours $staleH
 if ($problem) {
     $first = @($history[$nightKey])[0]
     if (-not $first) {

@@ -155,7 +155,7 @@ A machine that is away for days must not simply resume: with the lid closed, Win
 | `logs\bisync-*.log` | one log per bisync run, newest 30 kept |
 | `watcher.log`, `cloud-watcher.log` | watcher logs (rotated), incl. 10-min heartbeats |
 | `watcher-flush.log` | rclone's log of the last upload batch (appended to `watcher.log` after each flush) |
-| `watcher.lock`, `cloud-watcher.lock`, `sync.lock` | PID locks (single instance / bisync precedence) |
+| `watcher.lock`, `cloud-watcher.lock`, `sync.lock` | PID of the process holding the instance lock – the lock itself is a named mutex that Windows releases with the process (single instance / bisync precedence) |
 | `watcher-status.json`, `cloud-watcher-status.json` | counters for `sync-status.ps1` |
 | `cloud-watcher-pagetoken.txt` | persisted Changes API cursor; deleting it restarts from "now" (the gap is closed by the next bisync) |
 | `upload-ledger.txt` | echo control: own uploads of the last 60 min (path, modtime, size) |
@@ -195,7 +195,7 @@ Two hard-won details:
 
 Scripted: `pwsh -File uninstall.ps1` stops both watcher processes and removes all four tasks; `-RemoveState` also deletes the state directory. Manually:
 
-1. Stop the watcher processes: PIDs are in `watcher.lock` and `cloud-watcher.lock` inside the state dir (`Stop-Process -Id <pid>`). If a bisync is running (PID in `sync.lock` alive), let it finish first.
+1. Stop the watcher processes: PIDs are in `watcher.lock` and `cloud-watcher.lock` inside the state dir (`Stop-Process -Id <pid>`). If a bisync is running (`uninstall.ps1` refuses to go on then and names its PID), let it finish first.
 2. Delete the four tasks: `schtasks /Delete /F /TN "DriveSync watcher"` etc. (or in `taskschd.msc`).
 3. Optionally delete the state: `Remove-Item -Recurse -Force "$env:LOCALAPPDATA\drive-sync"`.
 4. Optionally remove the rclone remote (`rclone config delete gdrive`) and revoke the OAuth access in your Google account.
@@ -259,6 +259,8 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 | `test-journal-replay.ps1` | the journal and its replay against a real `rclone bisync` between two scratch folders: the resurrection without the replay, both sides, foreign changes, dry run, an unreachable remote (local only) |
 | `test-upload-retry.ps1` | the module above against real log lines and a real `rclone copy` with one file held open (local only) |
 | `test-liveness.ps1` | tests for `liveness.ps1` (local only) |
+| `single-instance.ps1` | instance lock for the watchers and the bisync wrapper (named mutex, PID file beside it), and the question "is a bisync running" for everyone else |
+| `test-single-instance.ps1` | tests for the lock across processes, including a holder that is killed (local only) |
 | `test-pending-rename.ps1` | an upload pending when its file or folder is renamed follows the new name, and a copy a resync brought back under the old name is recycled; `-Live` runs it against the watcher and the cloud in `Temp\` |
 | `test-filters.ps1` | the watchers' exclude logic (`filter-rules.ps1`) must give rclone's answer for a sample of every rule in `filters.txt` – run it after each filter change (local only) |
 | `test-alerts.ps1` | tests for `notify.ps1`; `-Live` shows one real test toast |

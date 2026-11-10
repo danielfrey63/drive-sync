@@ -11,9 +11,9 @@
 #
 # -Live needs a watcher past its start-up catch-up (restart-watchers.ps1 waits
 # for that). It cleans up after itself; the cloud copies go to the Drive trash.
-# The resync case holds a fake bisync lock (sync.lock with the PID of a
-# sleeping process) for about half a minute and refuses to run if a real one
-# exists.
+# The resync case lets a sleeping process hold the bisync lock
+# (single-instance.ps1) for about half a minute and refuses to run while a
+# real bisync holds it.
 
 param([switch]$Live)
 
@@ -213,17 +213,23 @@ try {
     if ($hit) { Check "Change und Rename in derselben Sammelrunde getroffen (Versuch $hit)" $true }
     else { Write-Host "SKIP  Change und Rename nie in derselben Sammelrunde - der Fall vom 02.11. ist nur offline geprueft" }
 
-    # a rename during a resync: hold a fake bisync lock, rename, let the
-    # "resync" copy the old name back down from the cloud, release the lock
+    # a rename during a resync: a second process holds the bisync lock, rename,
+    # let the "resync" copy the old name back down from the cloud, release it
+    $lockLib = Join-Path $PSScriptRoot "single-instance.ps1"
+    . $lockLib
     $lock = Join-Path $DriveSyncConfig.StateDir "sync.lock"
-    if (Test-Path $lock) { Check "Resync-Fall: kein echter Bisync-Lock vorhanden" $false (Get-Content $lock -TotalCount 1) }
+    if (Test-BisyncRunning) { Check "Resync-Fall: kein echter Bisync-Lock vorhanden" $false (Get-Content $lock -TotalCount 1) }
     else {
         Set-Content (Join-Path $localDir "r.md") "resync" -NoNewline
         $got = Wait-CloudContent "r.md" "resync"
         Check "Resync-Fall, Vorbereitung: r.md in der Cloud" ($got -eq "resync") "Cloud: '$got'"
-        $holder = Start-Process pwsh -ArgumentList "-NoProfile", "-Command", "Start-Sleep 600" -WindowStyle Hidden -PassThru
+        # encoded: Start-Process joins its arguments unquoted, the paths have spaces
+        $hold = ". '$lockLib'; [void](Enter-SingleInstance 'bisync' '$lock'); Start-Sleep 600"
+        $holder = Start-Process pwsh -ArgumentList "-NoProfile", "-EncodedCommand", ([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($hold))) -WindowStyle Hidden -PassThru
         try {
-            Set-Content $lock $holder.Id
+            $deadline = (Get-Date).AddSeconds(30)
+            while (-not (Test-BisyncRunning) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+            Check "resync case: the stand-in holds the bisync lock" (Test-BisyncRunning)
             Start-Sleep -Seconds 5
             Rename-Item (Join-Path $localDir "r.md") "s.md"
             Start-Sleep -Seconds 5

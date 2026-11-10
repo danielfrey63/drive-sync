@@ -17,9 +17,9 @@ $stateDir = $DriveSyncConfig.StateDir
 $taskNames = @("DriveSync watcher", "DriveSync cloud watcher", "DriveSync watchdog", "DriveSync rclone bisync")
 
 # refuse to pull the rug from under a running bisync
-$bisyncPid = Get-Content (Join-Path $stateDir "sync.lock") -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($bisyncPid -and (Get-Process -Id $bisyncPid -ErrorAction SilentlyContinue)) {
-    Write-Warning "A bisync run (PID $bisyncPid) is active - let it finish or stop it first."
+. (Join-Path $PSScriptRoot "single-instance.ps1")
+if (Test-BisyncRunning) {
+    Write-Warning "A bisync run (PID $(Get-Content (Join-Path $stateDir 'sync.lock') -TotalCount 1 -ErrorAction SilentlyContinue)) is active - let it finish or stop it first."
     exit 1
 }
 

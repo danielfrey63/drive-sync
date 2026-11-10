@@ -23,9 +23,9 @@
 #   Clear-DroppedDeletes $stateDir "path1"
 #
 # One writer per file (the local watcher owns path1, the cloud watcher path2), so
-# writers never meet. Reader against writer is serialised by the existing PID lock
-# "sync.lock": both watchers skip their whole flush cycle while a live process
-# holds it, and the consumer runs under it. That leaves one window - the wrapper
+# writers never meet. Reader against writer is serialised by the bisync instance
+# lock (single-instance.ps1): both watchers skip their whole flush cycle while a
+# run holds it, and the consumer runs under it. That leaves one window - the wrapper
 # takes the lock without waiting for a watcher that is ALREADY mid-flush, and an
 # upload batch runs for minutes. -Claim closes it.
 
