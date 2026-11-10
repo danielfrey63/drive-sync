@@ -22,6 +22,11 @@ $pwshExe = (Get-Command pwsh).Source
 
 $action = New-ScheduledTaskAction -Execute $pwshExe -Argument "-NoProfile -WindowStyle Hidden -File `"$script`""
 $trigger = New-ScheduledTaskTrigger -Daily -At $DailyAt
+# The cmdlet writes the start as an instant ("2026-08-08T02:00:00Z"), and the
+# scheduler keeps the instant, not the hour: registered in summer for 04:00,
+# the task ran at 03:00 from the end of October 2026 on. Without an offset the
+# start is wall-clock time and follows daylight saving.
+$trigger.StartBoundary = ([datetime]$trigger.StartBoundary).ToString("yyyy-MM-dd'T'HH:mm:ss")
 $settings = New-ScheduledTaskSettingsSet -RunOnlyIfNetworkAvailable -StartWhenAvailable `
     -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 6) `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries

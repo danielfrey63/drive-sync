@@ -23,10 +23,19 @@ Local changes reach the cloud in **under a minute**, cloud changes land locally 
 
 ```text
 $ pwsh -File sync-status.ps1
-Last run:     2026-08-06 04:00:01  exit=0  27.9 min
-Last success: 2026-08-06 04:28:32  (9.8 h ago)
-Watcher up:   running (PID 38248)  lastFlush=2026-08-06 15:56:53  up=412 ren=17 del=9
-Watcher down: running (PID 28568)  lastFlush=2026-08-06 15:57:35  down=163 recycled=4
+Last run:     2026-08-06 04:00  exit=0  27.9 min
+Last success: 2026-08-06 04:28  (9.8 h ago)
+Watcher up:   running (PID 38248), loop alive 0 min ago  lastFlush=2026-08-06 15:56  up=412 ren=17 del=9 parked=0
+Watcher down: running (PID 28568), loop alive 0 min ago  lastFlush=2026-08-06 15:57  down=163 recycled=4
+
+Checks
+  ok    last successful bisync 9.8 h ago
+  ok    upload watcher running, main loop alive
+  ok    cloud watcher running, main loop alive
+  ok    no open alerts
+  ok    scheduled tasks: all 4 registered, enabled and running this copy
+  ok    nightly bisync starts at 04:00, as configured
+  ok    rclone remote gdrive: is configured
 ```
 
 ## Goals
@@ -117,7 +126,7 @@ Include/exclude rules live in [`filters.txt`](filters.txt) – changing them req
 
 ## Operations and monitoring
 
-`pwsh -File sync-status.ps1` shows the last bisync, watcher liveness (from the PID locks) and transfer counters. All runtime state lives in the configured `StateDir`.
+`pwsh -File sync-status.ps1` shows the last bisync, watcher liveness (instance lock and sign-of-life stamp) and transfer counters, then checks the installation against the configuration: tasks registered, enabled and pointing at this copy, the nightly start time against `BisyncDailyAt`, open alerts, a `filters.txt` that changed since the last resync, a `config.local.ps1` that is synced to the other machines. It changes nothing and names the script that would; exit code 1 if any check warns. All runtime state lives in the configured `StateDir`.
 
 ### Forcing a sync from the command line
 
@@ -267,7 +276,7 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 | `run-hidden.vbs` | windowless task launcher (no console window flashing) |
 | `install-sync-task.ps1`, `install-watcher-task.ps1` | register the scheduled tasks (idempotent) |
 | `uninstall.ps1` | stops the watchers and removes all four tasks (`-RemoveState` also deletes the state dir) |
-| `sync-status.ps1` | status overview (last bisync, watcher liveness and counters) |
+| `sync-status.ps1` | status overview (last bisync, watcher liveness and counters) and health check of the installation against the configuration; read-only, exit code 1 on a warning |
 | `howto-google-oauth.md` | how to create your own Google OAuth client id |
 | `backup/run-backup.ps1`, `backup/backup-config.ps1`, `backup/restic-excludes.txt` | restic off-site backup to the Hetzner Storage Box (backup → forget → prune/check) |
 | `backup/install-backup-task.ps1` | registers the daily elevated backup task (idempotent) |

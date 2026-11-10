@@ -5,7 +5,7 @@
 #
 # All three tasks launch through run-hidden.vbs (wscript) so no console
 # window flashes. Duplicate starts are harmless: the watchers enforce a
-# single instance via their PID lock files.
+# single instance via their instance lock (single-instance.ps1).
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "config.ps1")
@@ -13,6 +13,7 @@ $pwshExe = (Get-Command pwsh).Source
 $wscript = Join-Path $env:SystemRoot "System32\wscript.exe"
 $wrapper = Join-Path $PSScriptRoot "run-hidden.vbs"
 $stateDir = $DriveSyncConfig.StateDir
+. (Join-Path $PSScriptRoot "single-instance.ps1")
 
 function New-HiddenAction([string]$script) {
     New-ScheduledTaskAction -Execute $wscript `
@@ -20,10 +21,10 @@ function New-HiddenAction([string]$script) {
 }
 
 $tasks = @(
-    @{ Name = "DriveSync watcher"; Script = Join-Path $PSScriptRoot "watch-drive.ps1"
+    @{ Name = "DriveSync watcher"; Script = Join-Path $PSScriptRoot "watch-drive.ps1"; Instance = "watch-drive"
        Lock = Join-Path $stateDir "watcher.lock"
        Description = "Near-realtime upload watcher for $($DriveSyncConfig.LocalRoot) (drive-sync)" }
-    @{ Name = "DriveSync cloud watcher"; Script = Join-Path $PSScriptRoot "watch-cloud.ps1"
+    @{ Name = "DriveSync cloud watcher"; Script = Join-Path $PSScriptRoot "watch-cloud.ps1"; Instance = "watch-cloud"
        Lock = Join-Path $stateDir "cloud-watcher.lock"
        Description = "Near-realtime download watcher for $($DriveSyncConfig.Remote) changes (drive-sync)" }
 )
@@ -46,9 +47,8 @@ foreach ($t in $tasks) {
     Register-ScheduledTask -TaskName $t.Name -Action (New-HiddenAction $t.Script) `
         -Trigger $trigger -Settings $settings -Description $t.Description -Force | Out-Null
 
-    $pid_ = Get-Content $t.Lock -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($pid_ -and (Get-Process -Id $pid_ -ErrorAction SilentlyContinue)) {
-        Write-Host "Task '$($t.Name)' registered; watcher already running (PID $pid_)."
+    if (Test-InstanceRunning $t.Instance) {
+        Write-Host "Task '$($t.Name)' registered; watcher already running (PID $(Get-Content $t.Lock -TotalCount 1 -ErrorAction SilentlyContinue))."
     }
     elseif ($paused) {
         Write-Host "Task '$($t.Name)' registered; NOT started (watchdog-pause present)."

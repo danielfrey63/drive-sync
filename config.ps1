@@ -89,6 +89,10 @@ $DriveSyncConfig = @{
     PacerBurst    = 200
 }
 
+# the defaults as they stand above, for sync-status.ps1 to name what a
+# config.local.ps1 changed
+$DriveSyncConfigDefaults = $DriveSyncConfig.Clone()
+
 $__localConfig = Join-Path $PSScriptRoot "config.local.ps1"
 if (Test-Path $__localConfig) { . $__localConfig }
 

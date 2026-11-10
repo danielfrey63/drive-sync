@@ -64,6 +64,14 @@ try {
 
     Check "Toast-Helfer der ai-toolbox ist auffindbar" (Test-Path $realToast) $realToast
 
+    foreach ($a in @(Get-DriveSyncOpenAlerts)) { Clear-DriveSyncAlert $a.Key }
+    foreach ($k in "watcher-up", "conflict-review", "upload-stuck") { [void](Send-DriveSyncAlert -Key $k -Title "T3") }
+    $open = @(Get-DriveSyncOpenAlerts)
+    Check "open alerts: the two conditions, not the incident" ($open.Count -eq 2 -and (@($open.Key | Sort-Object) -join ',') -eq 'upload-stuck,watcher-up') (@($open.Key) -join ',')
+    Check "open alerts carry the local time of the toast" ([math]::Abs(((Get-Date) - $open[0].Raised).TotalMinutes) -lt 2) "$($open[0].Raised)"
+    Clear-DriveSyncAlert "watcher-up"; Clear-DriveSyncAlert "upload-stuck"
+    Check "all cleared: nothing open, the incident stays out" (@(Get-DriveSyncOpenAlerts).Count -eq 0)
+
     if ($Live) {
         $script:toastScript = $realToast
         Clear-DriveSyncAlert "test-live"

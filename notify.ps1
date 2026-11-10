@@ -81,6 +81,20 @@ function Send-DriveSyncAlert {
     }
 }
 
+# Keys that report an incident, not a condition: nothing ever clears them,
+# their entry in alerts.json is only the repeat throttle. Every other key is
+# cleared by whoever raised it once the condition is over.
+$script:incidentAlerts = @('conflict-review', 'conflict-incoming')
+
+# The conditions that were alerted and have not ended yet, oldest first:
+# .Key and .Raised (local time of the last toast).
+function Get-DriveSyncOpenAlerts {
+    $state = Get-DriveSyncAlertState
+    @($state.Keys | Where-Object { $script:incidentAlerts -notcontains $_ } | ForEach-Object {
+            [pscustomobject]@{ Key = $_; Raised = [DateTimeOffset]::FromUnixTimeSeconds($state[$_]).LocalDateTime }
+        } | Sort-Object Raised)
+}
+
 function Clear-DriveSyncAlert([string]$Key) {
     try {
         $state = Get-DriveSyncAlertState

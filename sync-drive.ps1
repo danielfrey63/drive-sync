@@ -268,12 +268,15 @@ try {
     # 2026-10-09..20: eleven nights of "Must run --resync", nobody noticed.
     # A run that needs a resync alerts at once; any other failure (retryable
     # under --resilient, e.g. a DNS hiccup) only once the last success is
-    # older than AlertStaleSyncHours. A success re-arms both.
+    # older than AlertStaleSyncHours. A success re-arms both - and ends every
+    # other condition that had kept a run from succeeding.
     if (-not $DryRun) {
         if ($exit -eq 0) {
             Clear-DriveSyncAlert "bisync-resync"
             Clear-DriveSyncAlert "bisync-failed"
             Clear-DriveSyncAlert "bisync-root"
+            Clear-DriveSyncAlert "bisync-stale"
+            Clear-DriveSyncAlert "resync-guard"
         }
         else {
             $since = if ($newStatus.lastSuccess) { ([datetime]$newStatus.lastSuccess.end).ToString("dd.MM. HH:mm") } else { "nie" }
