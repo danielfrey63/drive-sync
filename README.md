@@ -1,7 +1,3 @@
-| `alerts.json`, `alerts.log` | last firing time per alert key (re-armed by recovery); every alert raised |
-| `watchdog-restarts.json` | restart times per watcher within the last hour (crash-loop detection) |
-| `notify.ps1` | toast alerts that stay in the Action Center (via `ai-toolbox\tools\notify\toast.ps1`), one per condition every `AlertRepeatHours`: bisync needs a resync, bisync failing longer than `AlertStaleSyncHours`, local root unwritable, resync guard failed, a watcher crash-looping (`AlertWatcherRestarts` restarts within an hour, with the cause) |
-| `test-alerts.ps1` | tests for `notify.ps1`; `-Live` shows one real test toast |
 <div align="center">
 
 # drive-sync
@@ -158,6 +154,8 @@ A machine that is away for days must not simply resume: with the lid closed, Win
 | `dropped-deletes-path1.txt`, `dropped-deletes-path2.txt` | paths whose delete a `MaxDeletes` storm dropped, per bisync side; consumed and cleared by the next nightly run |
 | `rmdirs-last.txt` | timestamp of the last remote empty-dir cleanup |
 | `watcher-lastseen.txt`, `watcher-catchup.log` | liveness stamp of the upload watcher ("everything up to here is uploaded or captured" — only advances while nothing is pending) and the log of the last start-up catch-up |
+| `alerts.json`, `alerts.log` | last firing time per alert key (re-armed by recovery); every alert raised |
+| `watchdog-restarts.json` | restart times per watcher within the last hour (crash-loop detection) |
 | `watchdog.log`, `watchdog-pause` | watchdog log; the pause marker suppresses restarts during maintenance (auto-discarded after 6 h; a first line `pid:<n>` keeps it alive as long as that process runs) |
 | `bin\rclone.exe` | optional custom rclone build; the watchers prefer it, deleting it falls back to the PATH rclone |
 
@@ -237,7 +235,8 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 | `sync-drive.ps1` | bisync wrapper (lock, logs, `status.json`); `-Resync` re-baselines, `-DryRun` previews |
 | `watch-drive.ps1` | upload watcher local → cloud (new/update/rename/delete + start-up catch-up) |
 | `watch-cloud.ps1` | download watcher cloud → local (new/update/trash); `-Once` runs a single cycle |
-| `watchdog.ps1` | restarts silently died watchers every 15 min |
+| `watchdog.ps1` | restarts silently died watchers every 15 min; alerts when one keeps dying right after start |
+| `notify.ps1` | toast alerts that stay in the Action Center (via `ai-toolbox\tools\notify\toast.ps1`), one per condition every `AlertRepeatHours`: bisync needs a resync, bisync failing longer than `AlertStaleSyncHours`, local root unwritable, resync guard failed, a watcher crash-looping (`AlertWatcherRestarts` restarts within an hour, with the cause) |
 | `drive-api.ps1` | direct Drive v3 API with the rclone remote's OAuth token: path resolution for the cloud watcher, flat trash listing for the resync guard (~75 s instead of ~90 min) |
 | `filter-rules.ps1` | shared exclude logic for the watchers, derived from `filters.txt` |
 | `upload-ledger.ps1` | echo control between the watchers: own uploads with modtime and size |
@@ -246,6 +245,7 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 | `test-conflict-chain.ps1` | tests for the two modules above (no cloud access) |
 | `test-pending-rename.ps1` | an upload pending when its file or folder is renamed follows the new name, and a copy a resync brought back under the old name is recycled; `-Live` runs it against the watcher and the cloud in `Temp\` |
 | `test-filters.ps1` | the watchers' exclude logic (`filter-rules.ps1`) must give rclone's answer for a sample of every rule in `filters.txt` – run it after each filter change (local only) |
+| `test-alerts.ps1` | tests for `notify.ps1`; `-Live` shows one real test toast |
 | `run-hidden.vbs` | windowless task launcher (no console window flashing) |
 | `install-sync-task.ps1`, `install-watcher-task.ps1` | register the scheduled tasks (idempotent) |
 | `uninstall.ps1` | stops the watchers and removes all four tasks (`-RemoveState` also deletes the state dir) |
@@ -263,4 +263,4 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 
 ## License
 
-| `watchdog.ps1` | restarts silently died watchers every 15 min; alerts when one keeps dying right after start |
+[MIT](LICENSE)
