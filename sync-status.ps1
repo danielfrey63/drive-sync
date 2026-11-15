@@ -55,6 +55,15 @@ else {
     "Last success: NEVER"
     Report 'WARN' "no successful bisync recorded"
 }
+# what the last run carried out from the delete journal: a large number
+# explains an unusually big night (2026-11-14: 1984 files of an audio cleanup)
+if ($s -and $s.lastRun.log -and (Test-Path $s.lastRun.log)) {
+    $done = @(Select-String -Path $s.lastRun.log -Pattern ' JOURNAL: delete journal path(1|2): (trashed in the cloud|recycled): ' |
+        ForEach-Object { $_.Matches[0].Groups[2].Value })
+    $trashed = @($done | Where-Object { $_ -eq 'trashed in the cloud' }).Count
+    $recycled = $done.Count - $trashed
+    if ($done.Count) { "Journal:      last run carried out $trashed local delete(s) in the cloud (Drive trash) and $recycled cloud delete(s) locally (recycle bin)" }
+}
 if (Test-BisyncRunning) { "Bisync:       running now (PID $(Get-LockPid 'sync.lock'))" }
 
 # --- the watchers ------------------------------------------------------------

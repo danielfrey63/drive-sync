@@ -130,7 +130,8 @@ Include/exclude rules live in [`filters.txt`](filters.txt) – changing them req
 
 ### Forcing a sync from the command line
 
-- **Full reconciliation now** — same as the nightly run, locks, logs and `status.json` included (watchers defer automatically): `pwsh -File sync-drive.ps1`. A full run lists both sides completely, so expect roughly an hour on the baseline corpus.
+- **Usually unnecessary:** the cloud watcher polls the Changes API every `PollSeconds`, so files uploaded straight to the cloud land locally within 1–2 minutes – not only at night. If they don't, check `sync-status.ps1` first – a dead watcher or a filtered path is more likely than a missing "force". Google-native docs and filtered paths never come down, by design.
+- **Full reconciliation now** – same as the nightly run, locks, logs and `status.json` included (watchers defer automatically): `pwsh -File sync-drive.ps1`. A full run lists both sides completely; 15–35 min on the current corpus (November 2026).
 - **Pull one remote folder down immediately** (never deletes locally, `--update` never overwrites newer local files; add `--dry-run` to preview):
 
   ```powershell
@@ -138,7 +139,6 @@ Include/exclude rules live in [`filters.txt`](filters.txt) – changing them req
   ```
 
   Keep `--drive-skip-gdocs` (otherwise google-native docs come down as `.docx`/`.xlsx` exports and get re-uploaded as new files) and the filters file (otherwise excluded paths materialise locally).
-- **Usually unnecessary:** the cloud watcher polls the Changes API every `PollSeconds`, so remote edits land locally within 1–2 minutes. If they don't, check `sync-status.ps1` first — a dead watcher or a filtered path is more likely than a missing "force".
 - **Avoid** `rclone sync gdrive: <local>`: it mirrors deletions and bypasses every safety net of this setup.
 
 ### Adding a second machine

@@ -11,12 +11,21 @@
 
 param(
     [string]$TaskName = "DriveSync rclone bisync",
-    [string]$DailyAt = ""   # empty = BisyncDailyAt from config.ps1
+    [string]$DailyAt = ""   # empty = BisyncDailyAt from this machine's entry in config.ps1
 )
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "config.ps1")
-if (-not $DailyAt) { $DailyAt = $DriveSyncConfig.BisyncDailyAt }
+# Two machines on the default start time run their bisyncs against the same
+# remote at once, and the final listing check fails on the other's writes.
+# A machine without its own entry would silently take the default.
+if (-not $DailyAt) {
+    if (-not ($DriveSyncMachine -and $DriveSyncMachine.ContainsKey('BisyncDailyAt'))) {
+        Write-Warning "This machine ($env:COMPUTERNAME) has no BisyncDailyAt in `$DriveSyncMachines (config.ps1). Add it there - each machine its own time - or pass -DailyAt explicitly. Nothing registered."
+        exit 1
+    }
+    $DailyAt = $DriveSyncConfig.BisyncDailyAt
+}
 $script = Join-Path $PSScriptRoot "sync-drive.ps1"
 $pwshExe = (Get-Command pwsh).Source
 
