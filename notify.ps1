@@ -49,11 +49,15 @@ function Write-DriveSyncAlertLog([string]$msg) {
 
 # Returns $true if a toast was handed to Windows, $false if suppressed or
 # unavailable. Never throws.
+# -Details: the file a click on the toast opens (usually the log of what went
+# wrong); missing or absent falls back to alerts.log, which always names the
+# alert.
 function Send-DriveSyncAlert {
     param(
         [Parameter(Mandatory)][string]$Key,
         [Parameter(Mandatory)][string]$Title,
         [string]$Body = '',
+        [string]$Details = '',
         [switch]$Force
     )
     try {
@@ -65,14 +69,15 @@ function Send-DriveSyncAlert {
         }
         $state[$Key] = $now
         Save-DriveSyncAlertState $state
-        Write-DriveSyncAlertLog "ALERT [$Key] $Title | $Body"
+        if (-not $Details -or -not (Test-Path -LiteralPath $Details)) { $Details = $script:alertLogFile }
+        Write-DriveSyncAlertLog "ALERT [$Key] $Title | $Body | details: $Details"
         if (-not (Test-Path -LiteralPath $script:toastScript)) {
             Write-DriveSyncAlertLog "toast helper missing ($script:toastScript) - logged only"
             return $false
         }
         # called as a script, not dot-sourced: its param block would rebind
         # $Title/$Body to empty in the dot-sourcing scope
-        & $script:toastScript -Title $Title -Body $Body -Reminder -AppId 'DriveSync.Alerts' -AppName 'Drive-Sync'
+        & $script:toastScript -Title $Title -Body $Body -Url ([Uri]$Details).AbsoluteUri -Reminder -AppId 'DriveSync.Alerts' -AppName 'Drive-Sync'
         return $true
     }
     catch {

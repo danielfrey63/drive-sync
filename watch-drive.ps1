@@ -259,12 +259,12 @@ function Update-UploadAlert {
     if ($stuck.Count -gt 0) {
         $script:uploadAlerted = $true
         Send-DriveSyncAlert -Key "upload-stuck" -Title "Drive-Sync: Upload hängt" `
-            -Body "$($stuck.Count) Datei(en) lassen sich seit über $stuckMinutes min nicht hochladen, z.B. $($stuck[0].Rel): $($stuck[0].Reason)" | Out-Null
+            -Body "$($stuck.Count) Datei(en) lassen sich seit über $stuckMinutes min nicht hochladen, z.B. $($stuck[0].Rel): $($stuck[0].Reason)" -Details $logFile | Out-Null
     }
     elseif ($uploadFailSince -and ($now - $uploadFailSince).TotalMinutes -ge $stuckMinutes) {
         $script:uploadAlerted = $true
         Send-DriveSyncAlert -Key "upload-stuck" -Title "Drive-Sync: Uploads scheitern" `
-            -Body "Seit $([int]($now - $uploadFailSince).TotalMinutes) min kommt kein Upload durch (Netz, Anmeldung oder Kontingent?). Details in watcher.log." | Out-Null
+            -Body "Seit $([int]($now - $uploadFailSince).TotalMinutes) min kommt kein Upload durch (Netz, Anmeldung oder Kontingent?). Klick öffnet watcher.log." -Details $logFile | Out-Null
     }
     elseif ($script:uploadAlerted) {
         $script:uploadAlerted = $false

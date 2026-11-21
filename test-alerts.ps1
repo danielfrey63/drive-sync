@@ -25,12 +25,12 @@ try {
     # a stand-in helper script that records its calls instead of showing a toast
     $fake = Join-Path $scratch "toast.ps1"
     $calls = Join-Path $scratch "calls.txt"
-    Set-Content $fake "param([string]`$Title, [string]`$Body, [switch]`$Reminder, [string]`$AppId, [string]`$AppName) Add-Content '$calls' `"`$AppId|`$Reminder|`$Title`""
+    Set-Content $fake "param([string]`$Title, [string]`$Body, [switch]`$Reminder, [string]`$AppId, [string]`$AppName, [string]`$Url) Add-Content '$calls' `"`$AppId|`$Reminder|`$Title|`$Url`""
     $script:toastScript = $fake
     function Calls { @(Get-Content $calls -ErrorAction SilentlyContinue) }
 
     Check "first alert is shown" ((Send-DriveSyncAlert -Key "k1" -Title "T1" -Body "B") -and (Calls).Count -eq 1)
-    Check "toast stays in the Action Center (reminder) under its own app id" (@(Calls)[0] -eq "DriveSync.Alerts|True|T1") (@(Calls)[0])
+    Check "toast stays in the Action Center (reminder) under its own app id" (@(Calls)[0] -like "DriveSync.Alerts|True|T1|*") (@(Calls)[0])
     Check "a repeat within 12 h is suppressed" (-not (Send-DriveSyncAlert -Key "k1" -Title "T1") -and (Calls).Count -eq 1)
     Check "another key gets through" ((Send-DriveSyncAlert -Key "k2" -Title "T2") -and (Calls).Count -eq 2)
     Check "-Force ignores the repeat window" ((Send-DriveSyncAlert -Key "k1" -Title "T1" -Force) -and (Calls).Count -eq 3)
@@ -38,13 +38,25 @@ try {
     Clear-DriveSyncAlert "k1"
     Check "after Clear the same key alerts again at once" ((Send-DriveSyncAlert -Key "k1" -Title "T1") -and (Calls).Count -eq 4)
 
+    # the link a click on the toast opens
+    $alertsUri = ([Uri](Join-Path $scratch "alerts.log")).AbsoluteUri
+    Check "without -Details the toast links alerts.log" (@(Calls)[0] -like "*|$alertsUri") (@(Calls)[0])
+    $detail = Join-Path $scratch "bisync log Ä.log"
+    Set-Content -LiteralPath $detail "x"
+    [void](Send-DriveSyncAlert -Key "k3" -Title "T3" -Details $detail)
+    Check "-Details: the toast links that file as a file URI" (@(Calls)[-1] -like "*|file:///*" -and ([Uri](@(Calls)[-1] -split "\|")[-1]).LocalPath -eq $detail) (@(Calls)[-1])
+    [void](Send-DriveSyncAlert -Key "k4" -Title "T4" -Details (Join-Path $scratch "gone.log"))
+    Check "-Details on a missing file falls back to alerts.log" (@(Calls)[-1] -like "*|$alertsUri") (@(Calls)[-1])
+    Check "alerts.log names the details file" (@(AlertLog | Where-Object { $_ -like "*ALERT ``[k3``]*details: $detail" }).Count -eq 1)
+    Clear-DriveSyncAlert "k3"; Clear-DriveSyncAlert "k4"
+
     # an entry older than the repeat window fires again
     $st = Get-Content (Join-Path $scratch "alerts.json") -Raw | ConvertFrom-Json
     $st.k2 = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - 13 * 3600
     Set-Content (Join-Path $scratch "alerts.json") ($st | ConvertTo-Json -Compress)
-    Check "repeated once the repeat window is over" ((Send-DriveSyncAlert -Key "k2" -Title "T2") -and (Calls).Count -eq 5)
+    Check "repeated once the repeat window is over" ((Send-DriveSyncAlert -Key "k2" -Title "T2") -and (Calls).Count -eq 7)
 
-    Check "every alert is in alerts.log" (@(AlertLog | Where-Object { $_ -match 'ALERT \[' }).Count -eq 5)
+    Check "every alert is in alerts.log" (@(AlertLog | Where-Object { $_ -match 'ALERT \[' }).Count -eq 7)
 
     # helper missing: logged, no error for the caller
     $script:toastScript = Join-Path $scratch "nope.ps1"
@@ -59,7 +71,7 @@ try {
 
     # corrupt state file: fail-open, alert still goes out
     Set-Content (Join-Path $scratch "alerts.json") "{kaputt"
-    Set-Content $fake "param([string]`$Title, [string]`$Body, [switch]`$Reminder, [string]`$AppId, [string]`$AppName) Add-Content '$calls' `"`$AppId|`$Reminder|`$Title`""
+    Set-Content $fake "param([string]`$Title, [string]`$Body, [switch]`$Reminder, [string]`$AppId, [string]`$AppName, [string]`$Url) Add-Content '$calls' `"`$AppId|`$Reminder|`$Title|`$Url`""
     Check "a broken alerts.json blocks no alert" (Send-DriveSyncAlert -Key "k5" -Title "T5")
 
     Check "the ai-toolbox toast helper is found" (Test-Path $realToast) $realToast

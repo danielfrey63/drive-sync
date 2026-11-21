@@ -151,7 +151,7 @@ try {
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "resync guard failed (exit $LASTEXITCODE) - refusing to resync blind; see $logFile or use -SkipResyncGuard"
             Send-DriveSyncAlert -Key "resync-guard" -Force -Title "Drive-Sync: Resync abgebrochen" `
-                -Body "Der Resync-Guard konnte den Drive-Papierkorb nicht prüfen. Log: $logFile" | Out-Null
+                -Body "Der Resync-Guard konnte den Drive-Papierkorb nicht prüfen. Klick öffnet das Log." -Details $logFile | Out-Null
             exit 2
         }
     }
@@ -288,7 +288,7 @@ try {
                     Select-Object -First 1 | ForEach-Object { $_.Matches[0].Groups[1].Value }
                 if ($cause.Length -gt 160) { $cause = $cause.Substring(0, 160) + "…" }
                 Send-DriveSyncAlert -Key "bisync-resync" -Title "Drive-Sync: Resync nötig" `
-                    -Body "Letzter erfolgreicher Abgleich: $since. Ursache: $cause. Beheben: sync-drive.ps1 -Resync -ResyncMode newer" | Out-Null
+                    -Body "Letzter erfolgreicher Abgleich: $since. Ursache: $cause. Beheben: sync-drive.ps1 -Resync -ResyncMode newer" -Details $logFile | Out-Null
             }
             else {
                 $staleH = if ($DriveSyncConfig.AlertStaleSyncHours) { [double]$DriveSyncConfig.AlertStaleSyncHours } else { 36 }
@@ -296,7 +296,7 @@ try {
                 if (((Get-Date) - $lastOk).TotalHours -ge $staleH) {
                     $what = if ($exit -eq $ExitReplayFailed) { "Das Lösch-Journal liess sich nicht ausführen, der Abgleich wurde nicht gestartet" } else { "Exit $exit" }
                     Send-DriveSyncAlert -Key "bisync-failed" -Title "Drive-Sync: Nachtlauf scheitert" `
-                        -Body "$what, letzter erfolgreicher Abgleich: $since. Log: $logFile" | Out-Null
+                        -Body "$what, letzter erfolgreicher Abgleich: $since. Klick öffnet das Log." -Details $logFile | Out-Null
                 }
             }
         }
@@ -313,7 +313,7 @@ try {
             $where = ($dupes | ForEach-Object { ($_ -split '/')[0..2] -join '/' } | Group-Object | Sort-Object Count -Descending |
                 Select-Object -First 3 | ForEach-Object { "$($_.Name) ($($_.Count))" }) -join ', '
             Send-DriveSyncAlert -Key "drive-duplicates" -Title "Drive-Sync: doppelte Objekte" `
-                -Body "$($dupes.Count) Pfad(e) mit zwei Objekten, v.a. $where. Ein Umbenennen dort bricht den Nachtlauf ab. Log: $logFile" | Out-Null
+                -Body "$($dupes.Count) Pfad(e) mit zwei Objekten, v.a. $where. Ein Umbenennen dort bricht den Nachtlauf ab. Klick öffnet das Log." -Details $logFile | Out-Null
         }
         elseif ($exit -eq 0) { Clear-DriveSyncAlert "drive-duplicates" }
     }

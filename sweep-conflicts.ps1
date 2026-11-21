@@ -118,7 +118,7 @@ if ($Scan) {
         foreach ($k in $kept) { Write-Host "  review: $k" }
         . (Join-Path $PSScriptRoot "notify.ps1")
         Send-DriveSyncAlert -Key "conflict-review" -Title "Drive-Sync: Konfliktkopien prüfen" `
-            -Body "$($kept.Count) Konfliktkopie(n) mit eigenem Inhalt, z.B. $($kept[0]). Liste: sweep-conflicts.ps1 -Scan -WhatIf" | Out-Null
+            -Body "$($kept.Count) Konfliktkopie(n) mit eigenem Inhalt, z.B. $($kept[0]). Liste: sweep-conflicts.ps1 -Scan -WhatIf" -Details $sweepLog | Out-Null
     }
     exit 0
 }

@@ -120,7 +120,7 @@ foreach ($w in $watchers) {
             # a transfer that long may be genuine - a human decides
             Write-Log "'$($w.Task)' (PID $pid_) silent for $($state.IdleMinutes) min behind a running rclone - alerting, not restarting"
             Send-DriveSyncAlert -Key "$($w.Key)-hung" -Title "Drive-Sync: $($w.Task) hängt" `
-                -Body "Seit $([int]($state.IdleMinutes / 60)) h kein Lebenszeichen, ein rclone-Transfer läuft noch. Falls das kein sehr grosser Transfer ist: restart-watchers.ps1 ausführen." | Out-Null
+                -Body "Seit $([int]($state.IdleMinutes / 60)) h kein Lebenszeichen, ein rclone-Transfer läuft noch. Falls das kein sehr grosser Transfer ist: restart-watchers.ps1 ausführen." -Details $w.Log | Out-Null
             continue
         }
         if ($state.Verdict -ne 'silent') {
@@ -162,7 +162,7 @@ foreach ($w in $watchers) {
         $cause = if ($hung) { $hung } else { Get-CrashCause $w }
         Write-Log "'$($w.Task)' restarted $($history[$w.Key].Count)x within an hour - alerting: $cause"
         Send-DriveSyncAlert -Key $w.Key -Title "Drive-Sync: $($w.Task) stürzt ab" `
-            -Body "$($history[$w.Key].Count) Neustarts in einer Stunde, Sync in diese Richtung steht. Ursache: $cause" | Out-Null
+            -Body "$($history[$w.Key].Count) Neustarts in einer Stunde, Sync in diese Richtung steht. Ursache: $cause" -Details $w.Log | Out-Null
     }
 }
 
@@ -195,7 +195,8 @@ if ($problem) {
     }
     elseif ($now - $first -ge 600) {
         $sent = Send-DriveSyncAlert -Key $nightKey -Title "Drive-Sync: Nachtlauf bleibt aus" `
-            -Body "$problem Der tägliche Abgleich beider Seiten findet nicht statt. Prüfen: sync-status.ps1"
+            -Body "$problem Der tägliche Abgleich beider Seiten findet nicht statt. Klick öffnet das Log des letzten Laufs." `
+            -Details (Get-ChildItem (Join-Path $stateDir "logs\bisync-*.log") -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1).FullName
         if ($sent) { Write-Log "nightly bisync: $problem - alerted" }
     }
 }

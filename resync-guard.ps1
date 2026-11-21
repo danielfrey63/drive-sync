@@ -113,7 +113,7 @@ catch {
     # the resync still runs, but ~90 min later than it should - and a broken
     # API path would stay unnoticed in a log nobody reads
     Send-DriveSyncAlert -Key "resync-guard-fallback" -Title "Drive-Sync: Resync-Guard langsam" `
-        -Body "Drive-API nicht erreichbar ($($_.Exception.Message)), der Papierkorb wird per rclone gelesen (~90 min). Log: $LogFile" | Out-Null
+        -Body "Drive-API nicht erreichbar ($($_.Exception.Message)), der Papierkorb wird per rclone gelesen (~90 min). Klick öffnet das Log." -Details $LogFile | Out-Null
     $trash.Clear()
     $trashSource = "rclone"
     # --fast-list: one flat query instead of walking every folder of the corpus

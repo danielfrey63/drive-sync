@@ -306,7 +306,7 @@ try {
                         if ($foreign.Count -gt 0) {
                             Write-Log "WARN $($foreign.Count) conflict cop(ies) arrived from the cloud: $(($foreign | Select-Object -First 3) -join ', ')"
                             Send-DriveSyncAlert -Key "conflict-incoming" -Title "Drive-Sync: Konfliktkopien aus der Cloud" `
-                                -Body "$($foreign.Count) Datei(en), z.B. $($foreign[0]). Ein anderer Rechner hat Konflikte erzeugt. Läuft er noch?" | Out-Null
+                                -Body "$($foreign.Count) Datei(en), z.B. $($foreign[0]). Ein anderer Rechner hat Konflikte erzeugt. Läuft er noch?" -Details $logFile | Out-Null
                         }
                     }
                 }
