@@ -115,8 +115,19 @@ $rules = Get-ExcludeRules (Join-Path $PSScriptRoot "filters.txt")
 # --- Drive API: the rclone remote's credentials, path resolution ----------
 # (drive-api.ps1: Invoke-Drive, Resolve-RelPath, the folder cache $dirCache)
 . (Join-Path $PSScriptRoot "drive-api.ps1")
-try { $rootId = Initialize-DriveApi $rcloneExe $remoteName }
-catch { Write-Log "FATAL: $($_.Exception.Message)"; exit 1 }
+# Right after a boot the network may not be up yet ("host unknown"): on
+# 2026-11-20 the watcher died twice that way and waited for the watchdog.
+# Retry for a while instead; what still fails after that is a real problem.
+$apiDeadline = (Get-Date).AddMinutes(10)
+while ($true) {
+    try { $rootId = Initialize-DriveApi $rcloneExe $remoteName; break }
+    catch {
+        if ((Get-Date) -ge $apiDeadline) { Write-Log "FATAL: $($_.Exception.Message)"; exit 1 }
+        if (-not $apiWaitLogged) { Write-Log "Drive API not reachable yet ($($_.Exception.Message)) - retrying for up to 10 min"; $apiWaitLogged = $true }
+        Start-Sleep -Seconds 15
+    }
+}
+if ($apiWaitLogged) { Write-Log "Drive API reachable" }
 Write-Log "started (PID $PID): $($rules.Dirs.Count) dir rules, root=$rootId, poll=${PollSeconds}s"
 
 # --- page token: persisted across restarts ----------------------------------

@@ -74,7 +74,8 @@ $DriveSyncConfig = @{
     # unexportable google-native file (e.g. Earth projects, Forms) are
     # invisible in listings and would look empty. The Drive API refuses to
     # delete them anyway, but excluding known cases avoids noisy errors.
-    EmptyDirCleanupExcludes = @("/Google Earth/**")
+    # (2026-11-21: Champagner Reise refused, 3 attempts, 30 min)
+    EmptyDirCleanupExcludes = @("/Google Earth/**", "/Champagner/Services/Verkauf/Events/Ideen/**")
 
     # logon start delay of both watcher tasks (ISO 8601 duration). The start-up
     # catch-up lists the full corpus (~2 min of metadata I/O); run concurrently

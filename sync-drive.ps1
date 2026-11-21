@@ -248,7 +248,9 @@ try {
         }
         if (((Get-Date) - $lastCleanup).TotalDays -ge $cleanupDays) {
             Write-Host "Empty-dir cleanup due - running rclone rmdirs (log: $logFile)"
-            $rmArgs = @("rmdirs", $remote, "--leave-root", "--fast-list") +
+            # one attempt: a refused folder stays refused, and each retry lists
+            # the whole remote again (15 min per attempt on 2026-11-21)
+            $rmArgs = @("rmdirs", $remote, "--leave-root", "--fast-list", "--retries", "1") +
                 $DriveSyncConfig.Pacer +
                 @("--log-level", "INFO", "--log-file", $logFile)
             foreach ($ex in $DriveSyncConfig.EmptyDirCleanupExcludes) { $rmArgs += @("--exclude", $ex) }
