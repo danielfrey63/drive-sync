@@ -98,7 +98,8 @@ $DriveSyncConfig = @{
 $DriveSyncMachines = @{
     # Windows devbox
     "DESKTOP-ORT64TC" = @{ BisyncDailyAt = "04:00" }
-    # ThinkPad P16: its $env:COMPUTERNAME = @{ BisyncDailyAt = "02:00" }
+    # ThinkPad P16 Gen 3
+    "DANILENOVOP16G3" = @{ BisyncDailyAt = "02:00" }
 }
 
 # snapshots for sync-status.ps1, to name where a value comes from: the
