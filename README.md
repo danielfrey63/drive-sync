@@ -107,6 +107,8 @@ Defaults live in [`config.ps1`](config.ps1). Values that differ per machine go i
 | `RemoteName` | rclone remote name | `gdrive` |
 | `StateDir` | runtime state (logs, locks, cursors) | `%LOCALAPPDATA%\drive-sync` |
 | `MaxDeletes` | reactive delete cap per flush, counted after verification: a removed folder is one delete, a path that is back (upload side) or already gone locally (download side) is none; larger storms are journalled and carried out before the next bisync | `50` |
+| `RecycleFolderMaxFiles` | a cloud trash event never recycles a local folder holding more files; such a folder is left to the bisync and its delete limit | `1000` |
+| `BisyncMaxDeletePercent` | the nightly bisync aborts when it would delete more than this share of either side (`--max-delete`) | `5` |
 | `JournalDroppedDeletes` | record the paths a `MaxDeletes` storm dropped and carry those deletes out before every bisync; without it bisync copies back every dropped path that is younger than its baseline | `$true` |
 | `PollSeconds` | Changes API poll interval | `60` |
 | `AlertRepeatHours` | the same toast alert repeats at most this often | `12` |
@@ -270,6 +272,7 @@ drive-sync replaced Google's official DriveFS client after it repeatedly failed 
 | `test-liveness.ps1` | tests for `liveness.ps1` (local only) |
 | `single-instance.ps1` | instance lock for the watchers and the bisync wrapper (named mutex, PID file beside it), and the question "is a bisync running" for everyone else |
 | `test-single-instance.ps1` | tests for the lock across processes, including a holder that is killed (local only) |
+| `test-recycle-guard.ps1` | a cloud signal never recycles a local item that matches only in another letter case, nor a large folder (local only; re-enacts 2026-11-22) |
 | `run-tests.ps1` | runs all offline tests in parallel, one line per test, full output of a failing one; `-IfStaged` for the pre-commit hook |
 | `test-pending-rename.ps1` | an upload pending when its file or folder is renamed follows the new name, and a copy a resync brought back under the old name is recycled; `-Live` runs it against the watcher and the cloud in `Temp\` |
 | `test-filters.ps1` | the watchers' exclude logic (`filter-rules.ps1`) must give rclone's answer for a sample of every rule in `filters.txt` – run it after each filter change (local only) |

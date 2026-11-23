@@ -354,6 +354,8 @@ try {
                         if ($stat) { Write-Log "trash event skipped (path live in cloud again): $t"; continue }
                         $rc = Move-ToRecycleBin $abs
                         if ($rc -eq 0) { $recycledTotal++; Write-Log "cloud trash -> recycle bin: $t" }
+                        elseif ($rc -eq $script:RecycleRefusedCase) { Write-Log "WARN trash event skipped: the local name differs in letter case (another item): $t" }
+                        elseif ($rc -eq $script:RecycleRefusedSize) { Write-Log "WARN trash event skipped: folder too large for one event, left to the bisync and its delete limit: $t" }
                         else { Write-Log "WARN recycle failed (rc=$rc): $t" }
                     }
                 }

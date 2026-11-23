@@ -191,7 +191,10 @@ try {
         $rcArgs += "--resync"
         if ($ResyncMode) { $rcArgs += @("--resync-mode", $ResyncMode) }
     }
-    else { $rcArgs += @("--resilient", "--recover") }
+    else {
+        $rcArgs += @("--resilient", "--recover")
+        $rcArgs += @("--max-delete", "$($DriveSyncConfig.BisyncMaxDeletePercent)")
+    }
     if ($DryRun) { $rcArgs += "--dry-run" }
 
     $start = Get-Date

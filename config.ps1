@@ -26,6 +26,17 @@ $DriveSyncConfig = @{
     # out before the next bisync (safety against sync-amplified mass deletions)
     MaxDeletes    = 50
 
+    # a cloud trash event never recycles a local folder holding more files
+    # than this (recycle-bin.ps1); larger ones are left to the bisync, whose
+    # own limit below applies
+    RecycleFolderMaxFiles = 1000
+
+    # bisync aborts when a run would delete more than this share of either
+    # side (rclone --max-delete, percent; rclone's default is 50). On
+    # 2026-11-23 a run deleted 405'325 cloud files - 34 % of the corpus -
+    # after a local folder had been removed by mistake.
+    BisyncMaxDeletePercent = 5
+
     # record the paths a MaxDeletes storm dropped and carry them out before the
     # next bisync (journal-replay.ps1). Without this the cap does not defer a
     # delete, it can invert it: a file created after the last baseline and
