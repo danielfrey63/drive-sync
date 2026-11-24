@@ -206,6 +206,11 @@ try {
                         else { $pendingMeta.Remove($rel) }
                     }
                 }
+                # a long backlog is paged through in this one loop: on
+                # 2026-11-23 untrashing 405'000 files queued as many changes,
+                # the loop gave no sign of life for 40 min, the watchdog
+                # took it for hung and every restart began the backlog anew
+                Update-AliveStamp $aliveFile
                 if ($resp.newStartPageToken) {
                     # advance in memory only; the token FILE is written after a
                     # flush so deferred/unflushed changes survive a restart
