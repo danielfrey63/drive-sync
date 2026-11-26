@@ -18,6 +18,7 @@ $taskNames = @("DriveSync watcher", "DriveSync cloud watcher", "DriveSync watchd
 
 # refuse to pull the rug from under a running bisync
 . (Join-Path $PSScriptRoot "single-instance.ps1")
+. (Join-Path $PSScriptRoot "process-tree.ps1")
 if (Test-BisyncRunning) {
     Write-Warning "A bisync run (PID $(Get-Content (Join-Path $stateDir 'sync.lock') -TotalCount 1 -ErrorAction SilentlyContinue)) is active - let it finish or stop it first."
     exit 1
@@ -27,7 +28,7 @@ if (Test-BisyncRunning) {
 foreach ($lock in @("watcher.lock", "cloud-watcher.lock")) {
     $pid_ = Get-Content (Join-Path $stateDir $lock) -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($pid_ -and (Get-Process -Id $pid_ -ErrorAction SilentlyContinue)) {
-        Stop-Process -Id $pid_ -Force -Confirm:$false
+        [void](Stop-ProcessTree ([int]$pid_))   # with its rclone (process-tree.ps1)
         Write-Host "Stopped watcher process (PID $pid_, $lock)."
     }
     Remove-Item (Join-Path $stateDir $lock) -Force -Confirm:$false -ErrorAction SilentlyContinue

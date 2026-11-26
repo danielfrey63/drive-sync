@@ -49,6 +49,7 @@ if (Test-Path $pauseFile) {
 . (Join-Path $PSScriptRoot "notify.ps1")
 . (Join-Path $PSScriptRoot "liveness.ps1")
 . (Join-Path $PSScriptRoot "single-instance.ps1")
+. (Join-Path $PSScriptRoot "process-tree.ps1")
 
 $watchers = @(
     @{ Task = "DriveSync watcher"; Key = "watcher-up"; Lock = Join-Path $stateDir "watcher.lock"; Alive = Join-Path $stateDir "watcher.alive"
@@ -134,7 +135,7 @@ foreach ($w in $watchers) {
             continue
         }
         Write-Log "'$($w.Task)' (PID $pid_) gave no sign of life for $($state.IdleMinutes) min and waits for no transfer - stopping it"
-        Stop-Process -Id $pid_ -Force -Confirm:$false -ErrorAction SilentlyContinue
+        [void](Stop-ProcessTree ([int]$pid_))   # with its rclone (process-tree.ps1)
         for ($i = 0; $i -lt 20 -and (Get-Process -Id $pid_ -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 100 }
         $hung = "Hauptschleife stand $($state.IdleMinutes) min still"
     }

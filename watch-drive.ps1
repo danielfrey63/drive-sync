@@ -55,6 +55,7 @@ if (-not $script:instance) {
 # sign of life for the watchdog, touched from the main loop (liveness.ps1)
 . (Join-Path $PSScriptRoot "liveness.ps1")
 . (Join-Path $PSScriptRoot "remote-lease.ps1")
+. (Join-Path $PSScriptRoot "process-tree.ps1")
 $aliveFile = Join-Path $stateDir "watcher.alive"
 $lastSeenFile = Join-Path $stateDir "watcher-lastseen.txt"
 $maxDeletes = $DriveSyncConfig.MaxDeletes
@@ -302,6 +303,12 @@ function Add-LedgerEntries([string[]]$rels) {
 # While another machine's bisync holds its lease, the catch-up waits for the
 # main loop: the gap stays uncovered until then, so the stamp must not move
 # ($catchUpDeferred holds Update-LastSeen back).
+#
+# The catch-up is one long rclone call - 45 min after a 24-day gap on
+# 2026-11-26 - and a bisync may start while it runs, here or on the other
+# machine. Asking only at the start let it go on uploading into the P15's
+# bisync. So it runs in a thread and is watched every 15 s: a bisync of this
+# machine or a foreign lease stops it, and it is deferred like above.
 $catchUpDeferred = $false
 function Invoke-CatchUp {
   try {
@@ -333,11 +340,27 @@ function Invoke-CatchUp {
         $self = Get-Process -Id $PID
         $prevPriority = $self.PriorityClass
         $self.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
+        $cuArgs = @("copy", $root, $remote, "--max-age", "${maxAge}s", "--filter-from", $filters,
+            "--no-traverse", "--update", "--modify-window", "1s") + $pacer +
+            @("--transfers", "4", "--checkers", "4", "--log-level", "INFO", "--log-file", $cuLog)
+        $abortedFor = $null
         try {
-            & $rcloneExe copy $root $remote --max-age "${maxAge}s" --filter-from $filters `
-                --no-traverse --update --modify-window 1s @pacer --transfers 4 --checkers 4 `
-                --log-level INFO --log-file $cuLog 2>$null
-            $cuExit = $LASTEXITCODE
+            $cuJob = Start-ThreadJob -ArgumentList $rcloneExe, $cuArgs -ScriptBlock {
+                param($exe, $a)
+                & $exe @a 2>$null
+                $LASTEXITCODE
+            }
+            while (-not (Wait-Job $cuJob -Timeout 15)) {
+                if (Test-BisyncRunning) { $abortedFor = "a bisync of this machine started" }
+                elseif ($f = Test-ForeignBisyncRunning $rcloneExe) { $abortedFor = "a bisync of $($f.host) started (lease)" }
+                if ($abortedFor) {
+                    [void](Stop-ChildRclone $PID)
+                    [void](Wait-Job $cuJob -Timeout 30)
+                    break
+                }
+            }
+            $cuExit = @(Receive-Job $cuJob -ErrorAction SilentlyContinue)[-1]
+            Remove-Job $cuJob -Force -ErrorAction SilentlyContinue
         }
         finally { $self.PriorityClass = $prevPriority }
         $copied = @()
@@ -346,8 +369,15 @@ function Invoke-CatchUp {
                 ForEach-Object { $_.Matches[0].Groups[1].Value -replace '/', '\' })
         }
         if ($copied.Count -gt 0) { Add-LedgerEntries $copied }
-        Write-Log "catch-up: gap since $($lastSeen.ToString('s')), $($copied.Count) file(s) uploaded, exit=$cuExit"
-        if ($cuExit -eq 0) { Set-Content $lastSeenFile ($cuStart.ToString("o")) }
+        if ($abortedFor) {
+            # stamp untouched: the next catch-up covers the same gap again
+            $script:catchUpDeferred = $true
+            Write-Log "catch-up stopped: $abortedFor; $($copied.Count) file(s) uploaded so far, repeated once it is over"
+        }
+        else {
+            Write-Log "catch-up: gap since $($lastSeen.ToString('s')), $($copied.Count) file(s) uploaded, exit=$cuExit"
+            if ($cuExit -eq 0) { Set-Content $lastSeenFile ($cuStart.ToString("o")) }
+        }
     }
   }
   catch { Write-Log "WARN catch-up failed: $($_.Exception.Message)" }

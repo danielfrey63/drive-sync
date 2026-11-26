@@ -26,6 +26,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "config.ps1")
+. (Join-Path $PSScriptRoot "process-tree.ps1")
 
 $stateDir = $DriveSyncConfig.StateDir
 $all = @(
@@ -48,13 +49,15 @@ foreach ($w in $watchers) {
     $w.OldPid = $old
     $proc = if ($old) { Get-Process -Id $old -ErrorAction SilentlyContinue }
     if ($proc) {
-        Stop-Process -Id $old -Force
+        # with the rclone it may be waiting for, or that one goes on writing
+        # to the cloud as an orphan (process-tree.ps1)
+        $orphans = Stop-ProcessTree ([int]$old)
         # the new instance reads the lock: give the process a moment to be gone,
         # otherwise it sees a live PID and exits like every other duplicate
         for ($i = 0; $i -lt 20 -and (Get-Process -Id $old -ErrorAction SilentlyContinue); $i++) {
             Start-Sleep -Milliseconds 100
         }
-        Write-Host "$($w.Name): stopped PID $old"
+        Write-Host "$($w.Name): stopped PID $old$(if ($orphans) { " and $orphans process(es) it had started" })"
     }
     else {
         Write-Host "$($w.Name): no live process (lock PID: $(if ($old) { "$old, gone" } else { 'none' }))"
