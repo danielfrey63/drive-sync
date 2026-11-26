@@ -55,6 +55,8 @@ New-Item -ItemType Directory -Force $logDir | Out-Null
 # own exit code, outside rclone's 0..10: the delete journal could not be
 # replayed and the bisync was not started (see below)
 $ExitReplayFailed = 20
+# another machine held its bisync lease for RemoteLeaseWaitHours (remote-lease.ps1)
+$ExitForeignLease = 21
 
 # --- local root guard -------------------------------------------------------
 # Never let bisync loose on a root that is not writable: on 2026-09-21 a run
@@ -113,9 +115,45 @@ if (-not $script:instance) {
     exit 0
 }
 
+$lease = $null
+$renewal = $null
 try {
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $logFile = Join-Path $logDir "bisync-$stamp.log"
+
+    # --- cross-machine lease (remote-lease.ps1) -----------------------------
+    # The mutex above holds back this machine's watchers only. The lease in the
+    # cloud holds back the other machine's: its upload watcher defers flushes
+    # and its bisync waits here. 2026-11-26: the P15's watcher pushed edits
+    # during the P16's two-hour resync, and the final listing check aborted it.
+    # Taken before the guard and the journal replay, which belong to the run.
+    if (-not $DryRun) {
+        . (Join-Path $PSScriptRoot "remote-lease.ps1")
+        $leaseLog = {
+            param($m)
+            $line = "$(Get-Date -Format 'yyyy/MM/dd HH:mm:ss') LEASE : $m"
+            Write-Host $line
+            Add-Content $logFile $line -ErrorAction SilentlyContinue
+        }
+        $waitH = if ($DriveSyncConfig.RemoteLeaseWaitHours) { [double]$DriveSyncConfig.RemoteLeaseWaitHours } else { 4 }
+        $waitUntil = (Get-Date).AddHours($waitH)
+        while (-not ($lease = Enter-RemoteLease "rclone")) {
+            $other = Get-ForeignLease "rclone"
+            $holder = if ($other) { "$($other.host) ($($other.kind), until $([DateTimeOffset]::FromUnixTimeSeconds([long]$other.expires).LocalDateTime.ToString('HH:mm')))" } else { "another machine" }
+            if ((Get-Date) -gt $waitUntil) {
+                & $leaseLog "still held by $holder after $waitH h - not starting"
+                Send-DriveSyncAlert -Key "bisync-lease" -Title "Drive-Sync: Abgleich nicht gestartet" `
+                    -Body "Ein Abgleich auf $holder läuft seit über $waitH Stunden. Dieser Lauf wurde übersprungen." -Details $logFile | Out-Null
+                exit $ExitForeignLease
+            }
+            & $leaseLog "a bisync of $holder is running - waiting"
+            Start-Sleep -Seconds 300
+        }
+        if ($lease.Written) { & $leaseLog "taken, renewed every $([math]::Max(1, [int]($DriveSyncConfig.RemoteLeaseMinutes / 3))) min" }
+        else { & $leaseLog "WARN could not be written - running without cross-machine protection" }
+        $renewal = Start-LeaseRenewal "rclone" $lease
+        Clear-DriveSyncAlert "bisync-lease"
+    }
 
     # --- deletes the watchers dropped at the cap ----------------------------
     # Carried out here, before bisync looks: a file born and deleted between
@@ -327,5 +365,6 @@ try {
     exit $exit
 }
 finally {
+    if ($lease) { Stop-LeaseRenewal $renewal; Exit-RemoteLease "rclone" $lease }
     Exit-SingleInstance $script:instance $lockFile
 }

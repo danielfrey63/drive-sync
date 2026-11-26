@@ -17,7 +17,9 @@
 #    (journal-replay.ps1), because bisync alone cannot always read them as
 #    deletions - see there.
 #  - Exclude rules are DERIVED FROM filters.txt (shared filter-rules.ps1).
-#  - While the bisync wrapper's lock is active, flushing is deferred.
+#  - While the bisync wrapper's lock is active, flushing is deferred - and
+#    while ANOTHER machine holds its bisync lease in the cloud
+#    (remote-lease.ps1), uploads would break that run's final listing check.
 #  - Watcher buffer overflows are only logged: the nightly bisync catches up.
 #  - Start-up catch-up: a liveness stamp (watcher-lastseen.txt, refreshed with
 #    every heartbeat) marks the last covered moment; on start, files modified
@@ -52,6 +54,7 @@ if (-not $script:instance) {
 }
 # sign of life for the watchdog, touched from the main loop (liveness.ps1)
 . (Join-Path $PSScriptRoot "liveness.ps1")
+. (Join-Path $PSScriptRoot "remote-lease.ps1")
 $aliveFile = Join-Path $stateDir "watcher.alive"
 $lastSeenFile = Join-Path $stateDir "watcher-lastseen.txt"
 $maxDeletes = $DriveSyncConfig.MaxDeletes
@@ -295,7 +298,13 @@ function Add-LedgerEntries([string[]]$rels) {
 # or captured by the live FSW". It therefore only advances on a SUCCESSFUL
 # catch-up (to the catch-up START time, so changes made during the run stay
 # covered) and later only while no work is pending (see Update-LastSeen).
-try {
+#
+# While another machine's bisync holds its lease, the catch-up waits for the
+# main loop: the gap stays uncovered until then, so the stamp must not move
+# ($catchUpDeferred holds Update-LastSeen back).
+$catchUpDeferred = $false
+function Invoke-CatchUp {
+  try {
     $lastSeen = $null
     if (Test-Path $lastSeenFile) {
         try { $lastSeen = [datetime]::Parse((Get-Content $lastSeenFile -TotalCount 1), $null, [System.Globalization.DateTimeStyles]::RoundtripKind) } catch {}
@@ -303,6 +312,10 @@ try {
     if (Test-BisyncRunning) {
         # stamp untouched: the bisync reconciles the gap, the heartbeat takes over
         Write-Log "catch-up skipped: a bisync is running and reconciles the gap"
+    }
+    elseif ($foreign = Test-ForeignBisyncRunning $rcloneExe) {
+        $script:catchUpDeferred = $true
+        Write-Log "catch-up deferred: a bisync of $($foreign.host) is running (lease)"
     }
     elseif ($null -eq $lastSeen) {
         Write-Log "catch-up skipped: no liveness stamp yet (first run)"
@@ -336,14 +349,16 @@ try {
         Write-Log "catch-up: gap since $($lastSeen.ToString('s')), $($copied.Count) file(s) uploaded, exit=$cuExit"
         if ($cuExit -eq 0) { Set-Content $lastSeenFile ($cuStart.ToString("o")) }
     }
+  }
+  catch { Write-Log "WARN catch-up failed: $($_.Exception.Message)" }
 }
-catch { Write-Log "WARN catch-up failed: $($_.Exception.Message)" }
+Invoke-CatchUp
 
 # Advance the liveness stamp only when every queue is empty: pending work
 # lies BEFORE now, and stamping over it would hide it from the next catch-up.
 # A parked upload is pending work too.
 function Update-LastSeen {
-    if (($pending.Count + $renames.Count + $deletes.Count + $parked.Count) -eq 0) {
+    if (-not $catchUpDeferred -and ($pending.Count + $renames.Count + $deletes.Count + $parked.Count) -eq 0) {
         try { Set-Content $lastSeenFile ((Get-Date).ToString("o")) } catch {}
     }
 }
@@ -363,6 +378,10 @@ try {
         # are flushed without waiting for an event
         foreach ($r in @(Get-DueUploads $parked (Get-Date))) {
             if ($pending.Add($r) -and $null -eq $oldestPending) { $oldestPending = (Get-Date).AddSeconds(-60) }
+        }
+        if ($catchUpDeferred -and -not (Test-BisyncRunning) -and -not (Test-ForeignBisyncRunning $rcloneExe)) {
+            $catchUpDeferred = $false
+            Invoke-CatchUp
         }
         $drained = 0
         $evtTrace = [System.Collections.Generic.List[string]]::new()
@@ -425,6 +444,17 @@ try {
 
         # defer while a bisync holds its lock (Test-BisyncRunning, single-instance.ps1)
         if ($bisyncRunning) { continue }
+        # ... or another machine's bisync its lease (remote-lease.ps1); logged
+        # once per lease, not on every pass
+        $foreign = Test-ForeignBisyncRunning $rcloneExe
+        if ($foreign) {
+            if ($foreign.token -ne $lastForeignToken) {
+                Write-Log "flush deferred: a bisync of $($foreign.host) is running (lease), $($pending.Count) up / $($renames.Count) ren / $($deletes.Count) del held"
+                $lastForeignToken = $foreign.token
+            }
+            continue
+        }
+        if ($lastForeignToken) { Write-Log "lease of the other machine gone - flushing"; $lastForeignToken = $null }
         # nothing but uploads queued, and those are paused after a failed batch
         if (($renames.Count + $deletes.Count) -eq 0 -and (Get-Date) -lt $uploadHoldUntil) { continue }
         $oldestPending = $null

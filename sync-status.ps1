@@ -65,6 +65,14 @@ if ($s -and $s.lastRun.log -and (Test-Path $s.lastRun.log)) {
     if ($done.Count) { "Journal:      last run carried out $trashed local delete(s) in the cloud (Drive trash) and $recycled cloud delete(s) locally (recycle bin)" }
 }
 if (Test-BisyncRunning) { "Bisync:       running now (PID $(Get-LockPid 'sync.lock'))" }
+# the other machine's bisync lease (remote-lease.ps1): while it is live, this
+# machine's upload watcher holds its flushes and its bisync waits
+. (Join-Path $PSScriptRoot "remote-lease.ps1")
+$foreign = Get-ForeignLease "rclone"
+if ($foreign) {
+    $until = [DateTimeOffset]::FromUnixTimeSeconds([long]$foreign.expires).LocalDateTime.ToString("HH:mm")
+    "Lease:        a $($foreign.kind) of $($foreign.host) is running (lease until $until) - uploads here are held"
+}
 
 # --- the watchers ------------------------------------------------------------
 # running = the instance lock is held (the status json only updates on flushes,

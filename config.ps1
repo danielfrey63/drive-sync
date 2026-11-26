@@ -71,6 +71,17 @@ $DriveSyncConfig = @{
     # life for this long while it waits for no transfer (liveness.ps1)
     WatcherHungMinutes = 30
 
+    # cross-machine bisync lease (remote-lease.ps1): while one machine runs a
+    # bisync, the other one's upload watcher holds its flushes and its own
+    # bisync waits. The folder must stay below an excluded path (.cache/ in
+    # filters.txt). A lease lapses unless renewed within RemoteLeaseMinutes;
+    # the watchers ask the cloud at most every RemoteLeaseCheckSeconds; a
+    # bisync waits up to RemoteLeaseWaitHours for the other machine.
+    RemoteLeaseDir          = ".cache/drive-sync"
+    RemoteLeaseMinutes      = 30
+    RemoteLeaseCheckSeconds = 60
+    RemoteLeaseWaitHours    = 4
+
     # daily start time of the reconciliation bisync ("HH:mm"); a full run
     # lists both sides completely, so pick a quiet slot
     BisyncDailyAt = "04:00"
