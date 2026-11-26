@@ -24,10 +24,15 @@ New-Item -ItemType Directory -Force $hooksDir | Out-Null
 $hook = Join-Path $hooksDir "pre-commit"
 
 $lines = if (Test-Path $hook) { @(Get-Content $hook) } else { @("#!/bin/sh") }
+$orig = $lines -join "`n"
+# git for Windows spawns a hook through its shebang: without one the commit
+# fails with "cannot spawn .git/hooks/pre-commit" (P16, 2026-11-26, a hook
+# whose first line was a bare "#")
+if (-not $lines -or -not $lines[0].StartsWith("#!")) { $lines = @("#!/bin/sh") + @($lines | Where-Object { $_.Trim() -ne "#" }) }
 $foreign = @($lines | Select-Object -Skip 1 | Where-Object { $l = $_; -not ($managed | Where-Object { $l.Contains($_.Marker) }) })
 $out = @($lines[0]) + @($managed | ForEach-Object { "$($_.Line)   $($_.Marker)" }) + $foreign
 
-if (($out -join "`n") -ceq ($lines -join "`n")) {
+if (($out -join "`n") -ceq $orig) {
     Write-Host "pre-commit: drive-sync checks already installed ($hook)"
     exit 0
 }
